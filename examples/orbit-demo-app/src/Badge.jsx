@@ -133,7 +133,7 @@ export default function Badge({ front, back }) {
       s.ry += s.ryV * DT;
 
       // Lean into sideways motion a little, smoothed so it never snaps.
-      const vx = ((s.a.x - s.a.px + s.b.x - s.b.px) / 2) / DT;
+      const vx = (s.a.x - s.a.px + s.b.x - s.b.px) / 2 / DT;
       s.tilt = lerp(s.tilt, clamp(vx * 0.012, -22, 22), 1 - Math.exp(-10 * DT));
     }
 

@@ -26,12 +26,17 @@ export function webhookRoutes(app: FastifyInstance, ctx: AppContext): void {
     scope.addContentTypeParser("*", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
 
     scope.post("/api/webhooks/github", async (req, reply) => {
-      if (!ctx.config.githubWebhookSecret) {
-        return reply.code(503).send({ error: "GITHUB_WEBHOOK_SECRET is not configured" });
+      // Either a manually configured repository webhook, or the GitHub App's own webhook.
+      const secrets = [ctx.config.githubWebhookSecret, ctx.githubApp.credentials?.webhookSecret ?? ""].filter(Boolean);
+      if (secrets.length === 0) {
+        return reply
+          .code(503)
+          .send({ error: "No webhook secret configured (connect the GitHub App or set GITHUB_WEBHOOK_SECRET)" });
       }
       const raw = req.body as Buffer;
-      const signature = req.headers["x-hub-signature-256"];
-      if (!verifyGithubSignature(ctx.config.githubWebhookSecret, raw, typeof signature === "string" ? signature : undefined)) {
+      const header = req.headers["x-hub-signature-256"];
+      const signature = typeof header === "string" ? header : undefined;
+      if (!secrets.some((secret) => verifyGithubSignature(secret, raw, signature))) {
         return reply.code(401).send({ error: "Invalid signature" });
       }
 

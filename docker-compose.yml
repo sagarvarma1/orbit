@@ -1,4 +1,4 @@
-# docker compose up --build
+# Local trial: docker compose up --build   (production: see deploy/ and docs/self-hosting.md)
 #   Dashboard  http://localhost:3000
 #   API        http://localhost:4000
 #   Edge       http://<deployment>.localhost:8080, http://<project>.localhost:8080
@@ -24,6 +24,8 @@ services:
       BUILD_TIMEOUT_SECONDS: ${BUILD_TIMEOUT_SECONDS:-600}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      ORBIT_ADMIN_EMAIL: ${ORBIT_ADMIN_EMAIL:-}
+      ORBIT_ADMIN_PASSWORD: ${ORBIT_ADMIN_PASSWORD:-}
       ORBIT_DASHBOARD_URL: ${ORBIT_DASHBOARD_URL:-http://localhost:3000}
       BUILD_CACHE: ${BUILD_CACHE:-1}
       GIT_POLL_INTERVAL_SECONDS: ${GIT_POLL_INTERVAL_SECONDS:-10}

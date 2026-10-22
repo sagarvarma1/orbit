@@ -29,6 +29,9 @@ const GITHUB_PORT = 4199;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-e2e-"));
 const dataDir = path.join(tmp, "data");
 const children = [];
+const ADMIN = { email: "e2e@example.com", password: "e2e-password-123" };
+/** API token, created after signing in; every API call uses it. */
+let token = "";
 let passed = 0;
 let failed = 0;
 
@@ -49,7 +52,7 @@ function check(name, ok, detail = "") {
 async function api(method, url, body) {
   const res = await fetch(API + url, {
     method,
-    headers: body ? { "content-type": "application/json" } : {},
+    headers: { ...(body ? { "content-type": "application/json" } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await res.json().catch(() => ({}));
@@ -86,7 +89,9 @@ async function waitFor(deploymentId, statuses = ["ready", "error", "canceled"], 
 
 /** Collect an SSE log stream until the `end` event. */
 async function streamLogs(deploymentId) {
-  const res = await fetch(`${API}/api/deployments/${deploymentId}/logs/stream`);
+  const res = await fetch(`${API}/api/deployments/${deploymentId}/logs/stream`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const lines = [];
@@ -149,6 +154,9 @@ function start(name, script) {
       API_PORT: String(API_PORT),
       EDGE_PORT: String(EDGE_PORT),
       ORBIT_ALLOW_LOCAL_REPOS: "1",
+      ORBIT_ADMIN_EMAIL: ADMIN.email,
+      ORBIT_ADMIN_PASSWORD: ADMIN.password,
+      ORBIT_DASHBOARD_URL: "http://localhost:3000",
       GITHUB_WEBHOOK_SECRET: SECRET,
       GITHUB_TOKEN: "e2e-token",
       GITHUB_API_URL: `http://127.0.0.1:${GITHUB_PORT}`,
@@ -215,6 +223,26 @@ const failingRepo = makeRepo("broken", {
   "build.js": "console.log('compiling...'); console.error('SyntaxError: Unexpected token in src/App.jsx'); process.exit(1);",
 });
 
+/** npm workspaces: apps/web depends on packages/greet, with one lockfile at the root. */
+const monoRepo = makeRepo("mono", {
+  "package.json": JSON.stringify({ name: "mono", private: true, workspaces: ["apps/*", "packages/*"] }),
+  "packages/greet/package.json": JSON.stringify({ name: "@mono/greet", version: "1.0.0", main: "index.js" }),
+  "packages/greet/index.js": "module.exports = (name) => `Hello from the greet package, ${name}`;",
+  "apps/web/package.json": JSON.stringify({
+    name: "@mono/web",
+    version: "1.0.0",
+    scripts: { build: "node build.js" },
+    dependencies: { "@mono/greet": "*" },
+  }),
+  "apps/web/build.js":
+    "const fs = require('fs'); const greet = require('@mono/greet');\n" +
+    "fs.mkdirSync('dist', { recursive: true }); fs.writeFileSync('dist/index.html', `<h1>${greet('web')}</h1>`);",
+});
+execFileSync("npm", ["install", "--offline", "--no-audit", "--no-fund", "--silent"], { cwd: monoRepo });
+fs.rmSync(path.join(monoRepo, "node_modules"), { recursive: true, force: true });
+git(monoRepo, "add", "-A");
+git(monoRepo, "commit", "-qm", "Add lockfile");
+
 const slowRepo = makeRepo("slow", {
   "package.json": JSON.stringify({
     name: "slow",
@@ -238,8 +266,31 @@ async function main() {
       await sleep(500);
     }
   }
+  console.log("Authentication");
+  check("API requires sign-in", (await fetch(`${API}/api/projects`)).status === 401);
+  const login = await fetch(`${API}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(ADMIN),
+  });
+  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+  check("admin seeded from env can sign in", login.ok && cookie.startsWith("orbit_session="));
+  const forged = await fetch(`${API}/api/tokens`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie, origin: "http://evil.localhost:8180" },
+    body: "{}",
+  });
+  check("cookie writes from other origins are blocked", forged.status === 403);
+  const issued = await fetch(`${API}/api/tokens`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie, origin: "http://localhost:3000" },
+    body: JSON.stringify({ name: "e2e" }),
+  }).then((r) => r.json());
+  token = issued.token;
+  check("API token issued", token?.startsWith("orbit_"));
+
   const config = await api("GET", "/api/config");
-  console.log(`builder: ${config.builder}\n`);
+  console.log(`\nbuilder: ${config.builder}\n`);
 
   if (!OFFLINE) {
     console.log("Public GitHub repo: plain static HTML (mdn/beginner-html-site-styled)");
@@ -468,6 +519,17 @@ async function main() {
     check("clean URL /about serves about.html", (await edge(nd.id, "/about")).body.includes("About page"));
     check("Next.js 404.html used for unknown routes", (await edge(nd.id, "/missing")).status === 404);
   }
+
+  console.log("\nMonorepo (npm workspaces)");
+  const mono = await api("POST", "/api/projects", { repoUrl: `file://${monoRepo}`, name: "mono-web", rootDirectory: "apps/web" });
+  const md = await waitFor(mono.deployment.id);
+  const monoLogs = (await api("GET", `/api/deployments/${md.id}/logs`)).lines.map((l) => l.text);
+  check("monorepo app deployed", md.status === "ready", md.errorMessage ?? "");
+  check(
+    "installed from the workspace root",
+    monoLogs.some((t) => t.startsWith("Monorepo: installing from the repository root")),
+  );
+  check("workspace dependency resolved at build time", (await edge(md.id)).body.includes("Hello from the greet package, web"));
 
   console.log("\nCancel a running build");
   const slow = await api("POST", "/api/projects", { repoUrl: `file://${slowRepo}`, name: "slow", installCommand: "" });

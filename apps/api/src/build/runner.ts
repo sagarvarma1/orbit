@@ -183,7 +183,19 @@ export async function dockerAvailable(): Promise<boolean> {
 }
 
 export async function createRunner(config: Config): Promise<CommandRunner> {
-  if (config.builder === "process") return new ProcessRunner();
+  const publicInstance = config.rootDomain !== "localhost";
+  if (config.builder === "process") {
+    if (publicInstance)
+      console.warn("WARNING: ORBIT_BUILDER=process runs builds without isolation. Use Docker for anything you didn't write.");
+    return new ProcessRunner();
+  }
   if (config.builder === "docker") return new DockerRunner(config);
-  return (await dockerAvailable()) ? new DockerRunner(config) : new ProcessRunner();
+  if (await dockerAvailable()) return new DockerRunner(config);
+  // Falling back silently is fine on a laptop, not on a server people can deploy to.
+  if (publicInstance) {
+    throw new Error(
+      "Docker is not reachable, and builds without Docker aren't isolated. Start Docker, or set ORBIT_BUILDER=process to accept the risk.",
+    );
+  }
+  return new ProcessRunner();
 }

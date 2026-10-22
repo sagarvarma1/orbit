@@ -5,7 +5,10 @@ import type { AppContext } from "./context.js";
 import { PRESETS } from "./build/detect.js";
 import { HttpError } from "./lib/errors.js";
 import { deploymentRoutes } from "./routes/deployments.js";
+import { domainRoutes } from "./routes/domains.js";
+import { githubRoutes } from "./routes/github.js";
 import { inspectRoutes } from "./routes/inspect.js";
+import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
@@ -20,8 +23,16 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
         : {}),
     },
     logController: new LogController({ disableRequestLogging: true }),
+    trustProxy: ctx.config.trustProxy,
   });
-  await app.register(cors, { origin: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE"] });
+  // Only the dashboard may call the API from a browser on another origin (in development the
+  // dashboard runs on :3000 and the API on :4000). In production both share one origin.
+  const dashboardOrigin = new URL(ctx.config.dashboardUrl).origin;
+  await app.register(cors, {
+    origin: (origin, cb) => cb(null, origin === dashboardOrigin),
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) {
@@ -35,6 +46,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     return reply.code(500).send({ error: "Internal server error" });
   });
 
+  authRoutes(app, ctx);
   app.get("/api/health", async () => ({ ok: true }));
 
   /** Everything the dashboard needs to render URLs and status. */
@@ -44,8 +56,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     edgePort: ctx.config.publicEdgePort,
     builder: ctx.deployments.builderDescription,
     queue: ctx.deployments.queue.stats(),
-    webhookConfigured: Boolean(ctx.config.githubWebhookSecret),
-    githubConfigured: Boolean(ctx.config.githubToken),
+    webhookConfigured: Boolean(ctx.config.githubWebhookSecret) || ctx.githubApp.configured,
+    githubConfigured: Boolean(ctx.config.githubToken) || ctx.githubApp.configured,
+    githubApp: ctx.githubApp.configured,
     buildCache: ctx.config.buildCache,
     gitPollIntervalSeconds: ctx.config.gitPollIntervalSeconds,
     presets: Object.values(PRESETS),
@@ -55,5 +68,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   deploymentRoutes(app, ctx);
   inspectRoutes(app, ctx);
   webhookRoutes(app, ctx);
+  domainRoutes(app, ctx);
+  githubRoutes(app, ctx);
   return app;
 }

@@ -125,9 +125,7 @@ body {
   overflow: hidden;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
-  background:
-    linear-gradient(160deg, hsl(var(--hue) 60% 14%), #0b0b0b 55%),
-    #0b0b0b;
+  background: linear-gradient(160deg, hsl(var(--hue) 60% 14%), #0b0b0b 55%), #0b0b0b;
   border: 1px solid #ffffff1f;
   box-shadow:
     0 30px 60px -20px #000,

@@ -41,6 +41,7 @@ export interface Project {
   createdAt: number;
   updatedAt: number;
   productionUrl: string;
+  customDomains: { hostname: string; branch: string | null; url: string }[];
   production: Deployment | null;
   latestDeployment: Deployment | null;
 }
@@ -82,6 +83,7 @@ export interface BuildSettings {
   buildCommand: string | null;
   outputDirectory: string;
   warnings: string[];
+  workspaceRoot: string | null;
 }
 
 export interface InspectResult {
@@ -91,6 +93,7 @@ export interface InspectResult {
   defaultBranch: string;
   branches: string[];
   branch: string;
+  rootDirectory: string;
   commit: { sha: string; message: string; author: string };
   settings: BuildSettings;
   hasFunctions: boolean;
@@ -105,7 +108,49 @@ export interface PlatformConfig {
   queue: { running: number; queued: number; concurrency: number };
   webhookConfigured: boolean;
   githubConfigured: boolean;
+  githubApp: boolean;
   buildCache: boolean;
   gitPollIntervalSeconds: number;
   presets: FrameworkPreset[];
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  prefix: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+export interface GitHubStatus {
+  app: { name: string; slug: string; owner: string; htmlUrl: string; installUrl: string } | null;
+  installations: {
+    id: number;
+    account: string;
+    avatarUrl: string | null;
+    repositorySelection: "all" | "selected";
+    settingsUrl: string;
+  }[];
+  error: string | null;
+  personalAccessToken: boolean;
+}
+
+export interface GitHubRepository {
+  fullName: string;
+  url: string;
+  private: boolean;
+  defaultBranch: string;
+  pushedAt: string | null;
+}
+
+export interface DomainStatus {
+  hostname: string;
+  branch: string | null;
+  url: string;
+  createdAt: number;
+  dns: {
+    configured: boolean | null;
+    record: { type: "A" | "CNAME"; name: string; value: string } | null;
+    detail: string;
+  };
 }

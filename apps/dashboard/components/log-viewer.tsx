@@ -18,7 +18,7 @@ function useLogStream(deploymentId: string, onEnd: (status: DeploymentStatus) =>
   useEffect(() => {
     setLines([]);
     setState("connecting");
-    const source = new EventSource(`${API_URL}/api/deployments/${deploymentId}/logs/stream`);
+    const source = new EventSource(`${API_URL}/api/deployments/${deploymentId}/logs/stream`, { withCredentials: true });
     let buffer: LogLine[] = [];
     let frame = 0;
     // Batch lines per animation frame: npm installs can emit hundreds of lines per second.

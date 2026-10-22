@@ -58,8 +58,10 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/projects", async (req, reply) => {
     const input = createProjectInput.parse(req.body);
     const repoRef = parseRepoUrl(input.repoUrl, ctx.config.allowLocalRepos);
-    const remote = await lsRemote(repoRef.url).catch(() => {
-      throw new BadRequestError("Could not reach that repository. Is it public?");
+    const remote = await lsRemote(repoRef.url, await ctx.githubApp.tokenFor(repoRef.url)).catch(() => {
+      throw new BadRequestError(
+        "Could not reach that repository. If it's private, install the Orbit GitHub App on it (Settings → GitHub).",
+      );
     });
     const branch = input.branch || remote.defaultBranch;
     if (!remote.branches.some((b) => b.name === branch)) throw new BadRequestError(`Branch "${branch}" does not exist`);
@@ -154,7 +156,7 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/branches", async (req) => {
     const project = requireProject(ctx, req.params.id);
-    const remote = await lsRemote(project.repoUrl);
+    const remote = await lsRemote(project.repoUrl, await ctx.githubApp.tokenFor(project.repoUrl));
     return remote;
   });
 

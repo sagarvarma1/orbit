@@ -1,7 +1,11 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   detectFrameworkId,
   detectPackageManager,
+  findWorkspaceRoot,
   normalizeRelative,
   resolveBuildSettings,
   type RepoSnapshot,
@@ -113,5 +117,66 @@ describe("normalizeRelative", () => {
     expect(normalizeRelative("/apps/web")).toBe("apps/web");
     expect(() => normalizeRelative("../etc")).toThrow();
     expect(() => normalizeRelative("a/../../b")).toThrow();
+  });
+});
+
+describe("monorepos", () => {
+  function repo(files: Record<string, string>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-mono-"));
+    for (const [rel, content] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), content);
+    }
+    return dir;
+  }
+
+  it("finds the workspace root above a project without its own lockfile", () => {
+    const dir = repo({
+      "package.json": JSON.stringify({ name: "root", packageManager: "pnpm@10.0.0" }),
+      "pnpm-lock.yaml": "",
+      "pnpm-workspace.yaml": "packages: ['apps/*']",
+      "apps/web/package.json": JSON.stringify({ name: "web", scripts: { build: "vite build" }, devDependencies: { vite: "7" } }),
+      "examples/standalone/package.json": "{}",
+      "examples/standalone/package-lock.json": "{}",
+    });
+    expect(findWorkspaceRoot(dir, "apps/web")).toMatchObject({ directory: "." });
+    expect(findWorkspaceRoot(dir, "examples/standalone")).toBeNull(); // has its own lockfile
+    expect(findWorkspaceRoot(dir, ".")).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("installs at the root with its package manager and builds the project there", () => {
+    const workspace = {
+      directory: ".",
+      files: ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"],
+      packageJson: { name: "root", workspaces: undefined },
+    };
+    const web = snap({ name: "web", scripts: { build: "vite build" }, devDependencies: { vite: "7" } });
+    expect(resolveBuildSettings(web, {}, workspace)).toMatchObject({
+      framework: "vite",
+      packageManager: "pnpm",
+      installCommand: "pnpm install --frozen-lockfile",
+      buildCommand: "pnpm run build",
+      workspaceRoot: ".",
+      buildFrom: "project",
+    });
+  });
+
+  it("uses Turborepo when the workspace has turbo.json, unless the build command is overridden", () => {
+    const workspace = {
+      directory: ".",
+      files: ["package.json", "package-lock.json", "turbo.json"],
+      packageJson: { workspaces: ["apps/*"] },
+    };
+    const web = snap({ name: "@acme/web", scripts: { build: "next build" }, dependencies: { next: "16" } });
+    expect(resolveBuildSettings(web, {}, workspace)).toMatchObject({
+      installCommand: "npm ci",
+      buildCommand: "npx turbo run build --filter=@acme/web",
+      buildFrom: "workspace",
+    });
+    expect(resolveBuildSettings(web, { buildCommand: "npm run build:static" }, workspace)).toMatchObject({
+      buildCommand: "npm run build:static",
+      buildFrom: "project",
+    });
   });
 });

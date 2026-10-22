@@ -71,6 +71,48 @@ CREATE TABLE IF NOT EXISTS branch_heads (
   sha        TEXT NOT NULL,
   PRIMARY KEY (project_id, branch)
 );
+
+-- Custom domains. A domain serves the project's production deployment, or the latest
+-- deployment of one branch when branch is set.
+CREATE TABLE IF NOT EXISTS domains (
+  hostname   TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  branch     TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS domains_project_idx ON domains(project_id);
+
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  email         TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at    INTEGER NOT NULL
+);
+
+-- Only hashes of session and API tokens are stored, so a leaked database can't be replayed.
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  token_hash   TEXT NOT NULL UNIQUE,
+  prefix       TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  last_used_at INTEGER
+);
+
+-- Instance-wide settings, such as the GitHub App credentials.
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 export type Db = DatabaseSync;

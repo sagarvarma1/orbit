@@ -69,7 +69,13 @@ export default function App() {
               <dt>function</dt>
               <dd>{fn ? `${fn.message} · ${new Date(fn.time).toLocaleTimeString()}` : "…"}</dd>
             </dl>
-            <a className="site" href="https://sagar-varma.com" target="_blank" rel="noreferrer" onPointerDown={(e) => e.stopPropagation()}>
+            <a
+              className="site"
+              href="https://sagar-varma.com"
+              target="_blank"
+              rel="noreferrer"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
               sagar-varma.com ↗
             </a>
           </div>

@@ -123,15 +123,14 @@ that connects mid-build (or after) sees the full log.
   isolates).
 - **Child-process builds are not a security boundary.** Docker mode is the isolated mode;
   the fallback exists so it runs anywhere (including this sandbox).
-- **Single-tenant, no auth** on the dashboard/API. Fine for a local demo, not for the
-  internet — the VPS guide puts it behind Caddy basic auth.
+- **Single admin account.** Sign-in with sessions and API tokens; teams and roles come later.
+- **On-demand TLS per hostname** instead of a wildcard certificate by default: no DNS provider
+  credentials needed, at the cost of Let's Encrypt rate limits for heavy preview use.
 
-## Out of scope
+## Out of scope (for now)
 
-- Authentication, teams, billing, quotas.
-- SSR / ISR / edge middleware / image optimization.
-- GitHub App installation flow, private repos.
-- Custom domains per project, automatic TLS per project (the VPS guide uses a wildcard).
+- Teams, billing, quotas.
+- SSR / ISR / edge middleware / image optimization (next on the roadmap).
 - Multi-region edge, CDN caching, analytics.
 
 ## Feature checklist (status as delivered)

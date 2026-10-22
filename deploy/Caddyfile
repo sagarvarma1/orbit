@@ -1,41 +1,36 @@
-# Orbit behind Caddy with a wildcard certificate.
-# Replace example.com, and build Caddy with your DNS provider module (see docs/DEPLOY_VPS.md).
+# Orbit's public entry point. Used by deploy/docker-compose.yml; values come from .env.
+#
+#   {$ORBIT_APP_DOMAIN}    dashboard + API on one origin
+#   everything else        deployments, aliases and custom domains, served by the edge
+#
+# Certificates are issued on demand: the first HTTPS request for a hostname triggers one, after
+# Orbit's API confirms it serves that hostname. No DNS provider credentials are needed.
 {
-	email you@example.com
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		ask http://api:4000/api/tls/allowed
+	}
 }
 
-# Dashboard + API on one origin, so browser basic auth also covers fetch() and EventSource.
-app.example.com {
+{$ORBIT_APP_DOMAIN} {
 	encode zstd gzip
-
-	# GitHub must reach the webhook without basic auth (it's HMAC-verified instead).
-	@webhook path /api/webhooks/github
-	handle @webhook {
-		reverse_proxy 127.0.0.1:4000
-	}
-
+	# Dashboard and API share an origin, so the session cookie never leaves it.
 	handle /api/* {
-		basic_auth {
-			# caddy hash-password --plaintext 'your-password'
-			admin $2a$14$REPLACE_WITH_HASH
-		}
-		# SSE: Caddy flushes text/event-stream responses immediately.
-		reverse_proxy 127.0.0.1:4000
+		reverse_proxy api:4000
 	}
-
 	handle {
-		basic_auth {
-			admin $2a$14$REPLACE_WITH_HASH
-		}
-		reverse_proxy 127.0.0.1:3000
+		reverse_proxy dashboard:3000
 	}
 }
 
-# Every deployment and alias: <deployment-id>.example.com, <project>.example.com, <project>-git-<branch>.example.com
-*.example.com {
+https:// {
 	tls {
-		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		on_demand
 	}
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy edge:8080
+}
+
+http:// {
+	redir https://{host}{uri} permanent
 }

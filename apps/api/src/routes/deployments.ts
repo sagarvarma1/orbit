@@ -30,7 +30,10 @@ export function deploymentRoutes(app: FastifyInstance, ctx: AppContext): void {
       "cache-control": "no-cache, no-transform",
       connection: "keep-alive",
       "x-accel-buffering": "no",
-      "access-control-allow-origin": String(req.headers.origin ?? "*"),
+      // reply.hijack() skips the CORS plugin, so mirror its policy: only the dashboard's origin.
+      ...(req.headers.origin === new URL(ctx.config.dashboardUrl).origin
+        ? { "access-control-allow-origin": req.headers.origin, "access-control-allow-credentials": "true" }
+        : {}),
     });
     res.write("retry: 2000\n\n");
 

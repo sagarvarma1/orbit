@@ -4,7 +4,7 @@ import type { Config } from "../config.js";
 import type { CacheStatus, Deployment, Project } from "../db/repo.js";
 import { FUNCTION_ENV_FILE, FUNCTIONS_DIR, MANIFEST_FILE, STATIC_DIR, type DeploymentManifest } from "../lib/manifest.js";
 import { hasRoutingRules, parseRoutingConfig, ROUTING_CONFIG_FILE, type RoutingConfig } from "../lib/routing.js";
-import { type BuildSettings, normalizeRelative, readSnapshot, resolveBuildSettings } from "./detect.js";
+import { type BuildSettings, findWorkspaceRoot, normalizeRelative, readSnapshot, resolveBuildSettings } from "./detect.js";
 import { BuildCache, computeCacheKey } from "./cache.js";
 import { bundleFunctions } from "./functions.js";
 import { type CommitInfo, shallowCheckout } from "./git.js";
@@ -21,6 +21,8 @@ export interface BuildContext {
   /** Public URL of the deployment, exposed to the build as ORBIT_URL. */
   url: string;
   runner: CommandRunner;
+  /** Access token for cloning a private repository, if any. */
+  gitToken?: string;
   config: Config;
   signal: AbortSignal;
   log: {
@@ -115,7 +117,7 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       `Cloning ${project.repoUrl} (${deployment.ref === deployment.branch ? `branch: ${deployment.branch}` : `commit: ${deployment.ref.slice(0, 7)}`})`,
     );
     let t = Date.now();
-    const commit = await shallowCheckout(project.repoUrl, deployment.ref, workspace, signal).catch((err: Error) => {
+    const commit = await shallowCheckout(project.repoUrl, deployment.ref, workspace, signal, ctx.gitToken).catch((err: Error) => {
       throwIfAborted(signal);
       throw new BuildError(`git clone failed: ${err.message.split("\n").find((l) => l.startsWith("fatal")) ?? err.message}`);
     });
@@ -128,16 +130,25 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
     const projectDir = path.join(workspace, rootDirectory);
     if (!fs.existsSync(projectDir)) throw new BuildError(`Root directory "${rootDirectory}" does not exist in the repository`);
 
-    const settings = resolveBuildSettings(readSnapshot(projectDir), {
-      framework: project.framework,
-      installCommand: project.installCommand,
-      buildCommand: project.buildCommand,
-      outputDirectory: project.outputDirectory,
-    });
+    const settings = resolveBuildSettings(
+      readSnapshot(projectDir),
+      {
+        framework: project.framework,
+        installCommand: project.installCommand,
+        buildCommand: project.buildCommand,
+        outputDirectory: project.outputDirectory,
+      },
+      findWorkspaceRoot(workspace, rootDirectory),
+    );
     ctx.onSettings(settings);
     log.system(
       `Framework: ${settings.frameworkName}${settings.packageManager ? ` · package manager: ${settings.packageManager}` : ""} · builder: ${ctx.runner.description}`,
     );
+    if (settings.workspaceRoot) {
+      log.system(
+        `Monorepo: installing from ${settings.workspaceRoot === "." ? "the repository root" : `"${settings.workspaceRoot}"`}, building "${rootDirectory}"`,
+      );
+    }
     for (const warning of settings.warnings) log.system(`Warning: ${warning}`);
     const routing = readRoutingConfig(projectDir);
     if (hasRoutingRules(routing)) {
@@ -171,6 +182,10 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
     if (!config.buildCache) {
       ctx.onCache("skipped");
       log.system("Build cache disabled (BUILD_CACHE=0)");
+    } else if (settings.workspaceRoot) {
+      // node_modules is spread across the workspace; restoring only one directory would be wrong.
+      ctx.onCache("skipped");
+      log.system("Build cache not used for node_modules: monorepo workspace");
     } else {
       // node_modules holds native binaries, so a cache is only valid for the platform that built it.
       const platform =
@@ -207,12 +222,13 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
     }
 
     // 4. Install + build ------------------------------------------------------
-    const steps: [string, string | null][] = [
-      ["install", settings.installCommand],
-      ["build", settings.buildCommand],
+    const workspaceDir = settings.workspaceRoot ?? rootDirectory;
+    const steps: [string, string | null, string][] = [
+      ["install", settings.installCommand, workspaceDir],
+      ["build", settings.buildCommand, settings.buildFrom === "workspace" ? workspaceDir : rootDirectory],
     ];
     let installMs: number | null = null;
-    for (const [step, command] of steps) {
+    for (const [step, command, cwd] of steps) {
       throwIfAborted(signal);
       if (!command) {
         log.system(`Skipping ${step} (no command)`);
@@ -229,7 +245,7 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       const code = await ctx.runner.run({
         name: `${deployment.id}-${step}`,
         workspaceDir: workspace,
-        rootDirectory,
+        rootDirectory: cwd,
         command,
         env: buildEnv,
         onOutput: log.write,

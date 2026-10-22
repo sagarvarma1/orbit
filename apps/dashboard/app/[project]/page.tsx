@@ -132,7 +132,8 @@ export default function ProjectOverview() {
 function ProductionCard({ deployment, aliases }: { deployment: Deployment; aliases: string[] }) {
   const { project } = useProject();
   const link = commitUrl(project.repoUrl, deployment.commitSha);
-  const domains = [project.productionUrl, ...aliases.filter((a) => a !== project.productionUrl)];
+  const custom = project.customDomains.filter((d) => !d.branch).map((d) => d.url);
+  const domains = [...custom, project.productionUrl, ...aliases.filter((a) => a !== project.productionUrl)];
   return (
     <Card className="grid overflow-hidden md:grid-cols-[minmax(0,420px)_1fr]">
       <a

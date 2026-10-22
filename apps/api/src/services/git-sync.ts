@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Deployment, Project, Repo } from "../db/repo.js";
-import { lsRemote, parseRepoUrl } from "../build/git.js";
+import { type GitCredentials, lsRemote, parseRepoUrl } from "../build/git.js";
 import type { DeploymentService } from "./deployments.js";
 
 export interface PushEvent {
@@ -38,6 +38,7 @@ export class GitSync {
   constructor(
     private readonly repo: Repo,
     private readonly deployments: DeploymentService,
+    private readonly credentials: GitCredentials | null = null,
   ) {}
 
   projectsForRepo(repoUrlOrFullName: string): Project[] {
@@ -77,7 +78,7 @@ export class GitSync {
 
   /** Record current branch heads so the poller only reacts to commits pushed after import. */
   async snapshotHeads(project: Project): Promise<void> {
-    const remote = await lsRemote(project.repoUrl);
+    const remote = await lsRemote(project.repoUrl, await this.credentials?.tokenFor(project.repoUrl));
     for (const b of remote.branches) this.repo.setBranchHead(project.id, b.name, b.sha);
   }
 
@@ -102,7 +103,7 @@ export class GitSync {
       for (const project of this.repo.listProjects()) {
         try {
           const known = this.repo.getBranchHeads(project.id);
-          const remote = await lsRemote(project.repoUrl);
+          const remote = await lsRemote(project.repoUrl, await this.credentials?.tokenFor(project.repoUrl));
           for (const b of remote.branches) {
             if (known.get(b.name) === b.sha) continue;
             if (known.size === 0) {

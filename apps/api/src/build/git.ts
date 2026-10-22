@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 
-/** Git never prompts (we only support public repos) and never reads user config. */
+/** Git never prompts and never reads system config. */
 const GIT_ENV = {
   ...process.env,
   GIT_TERMINAL_PROMPT: "0",
@@ -11,9 +11,41 @@ const GIT_ENV = {
   GIT_ASKPASS: "echo",
 };
 
-export async function git(args: string[], cwd?: string, timeoutMs = 120_000, signal?: AbortSignal): Promise<string> {
-  const { stdout } = await exec("git", args, { cwd, env: GIT_ENV, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, signal });
+/**
+ * Credentials for private GitHub repositories go in through environment config
+ * (GIT_CONFIG_COUNT), never into the remote URL, argv or .git/config, so they can't end up in
+ * logs, process listings or the build workspace.
+ */
+function gitEnv(token?: string): NodeJS.ProcessEnv {
+  if (!token) return GIT_ENV;
+  return {
+    ...GIT_ENV,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+  };
+}
+
+export async function git(
+  args: string[],
+  cwd?: string,
+  timeoutMs = 120_000,
+  signal?: AbortSignal,
+  token?: string,
+): Promise<string> {
+  const { stdout } = await exec("git", args, {
+    cwd,
+    env: gitEnv(token),
+    timeout: timeoutMs,
+    maxBuffer: 16 * 1024 * 1024,
+    signal,
+  });
   return stdout.trim();
+}
+
+/** Provides access tokens for private repositories (the GitHub App). */
+export interface GitCredentials {
+  tokenFor(repoUrl: string): Promise<string | undefined>;
 }
 
 export interface RepoRef {
@@ -40,7 +72,7 @@ export function parseRepoUrl(input: string, allowLocal: boolean): RepoRef {
   const gh = GITHUB_RE.exec(trimmed.replace(/\/tree\/.*$/, ""));
   if (gh) return { url: `https://github.com/${gh[1]}/${gh[2]}.git`, fullName: `${gh[1]}/${gh[2]}`.toLowerCase() };
   if (allowLocal && (trimmed.startsWith("file://") || trimmed.startsWith("/"))) return { url: trimmed, fullName: null };
-  throw new Error("Enter a public GitHub repository URL, e.g. https://github.com/owner/repo");
+  throw new Error("Enter a GitHub repository URL, e.g. https://github.com/owner/repo");
 }
 
 export interface RemoteInfo {
@@ -49,8 +81,8 @@ export interface RemoteInfo {
 }
 
 /** Default branch and branch heads without cloning (`git ls-remote`). */
-export async function lsRemote(url: string): Promise<RemoteInfo> {
-  const out = await git(["ls-remote", "--symref", url, "HEAD", "refs/heads/*"], undefined, 30_000);
+export async function lsRemote(url: string, token?: string): Promise<RemoteInfo> {
+  const out = await git(["ls-remote", "--symref", url, "HEAD", "refs/heads/*"], undefined, 30_000, undefined, token);
   let defaultBranch = "main";
   const branches: { name: string; sha: string }[] = [];
   for (const line of out.split("\n")) {
@@ -75,10 +107,22 @@ export interface CommitInfo {
  * Shallow-fetch exactly one ref (branch name or full commit SHA) into `dir`.
  * `git fetch --depth 1 origin <sha>` works on GitHub, so webhook builds pin the pushed commit.
  */
-export async function shallowCheckout(url: string, ref: string, dir: string, signal?: AbortSignal): Promise<CommitInfo> {
+export async function shallowCheckout(
+  url: string,
+  ref: string,
+  dir: string,
+  signal?: AbortSignal,
+  token?: string,
+): Promise<CommitInfo> {
   await git(["init", "--quiet", dir]);
   await git(["remote", "add", "origin", url], dir);
-  await git(["-c", "protocol.version=2", "fetch", "--quiet", "--depth", "1", "--no-tags", "origin", ref], dir, 300_000, signal);
+  await git(
+    ["-c", "protocol.version=2", "fetch", "--quiet", "--depth", "1", "--no-tags", "origin", ref],
+    dir,
+    300_000,
+    signal,
+    token,
+  );
   await git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
   const [sha = "", author = "", ...message] = (await git(["log", "-1", "--format=%H%n%an%n%s"], dir)).split("\n");
   return { sha, author, message: message.join("\n") };

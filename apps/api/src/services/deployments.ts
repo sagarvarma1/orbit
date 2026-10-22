@@ -3,6 +3,7 @@ import type { Deployment, DeploymentTrigger, Project, Repo } from "../db/repo.js
 import { BuildError, runBuild } from "../build/pipeline.js";
 import { BuildCanceledError, BuildInterruptedError, BuildQueue, BuildTimeoutError } from "../build/queue.js";
 import type { LogStore } from "../build/logs.js";
+import type { GitCredentials } from "../build/git.js";
 import type { CommandRunner } from "../build/runner.js";
 import { ConflictError, NotFoundError } from "../lib/errors.js";
 import { newDeploymentId } from "../lib/ids.js";
@@ -32,6 +33,7 @@ export class DeploymentService {
     private readonly runner: CommandRunner,
     private readonly config: Config,
     private readonly github: GitHubNotifier | null = null,
+    private readonly credentials: GitCredentials | null = null,
   ) {
     this.queue = new BuildQueue((id, signal) => this.build(id, signal), config.buildConcurrency, config.buildTimeoutSeconds);
   }
@@ -152,6 +154,7 @@ export class DeploymentService {
         env: this.repo.envFor(project.id, deployment.target),
         url: publicUrl(this.config, deployment.id),
         runner: this.runner,
+        gitToken: await this.credentials?.tokenFor(project.repoUrl),
         config: this.config,
         signal,
         log: {

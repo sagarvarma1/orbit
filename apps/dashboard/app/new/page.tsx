@@ -2,10 +2,24 @@
 
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
-import { Badge, BranchIcon, Button, Card, CommitIcon, ErrorNote, Input, Label, PageHeader, Select } from "@/components/ui";
+import Link from "next/link";
+import {
+  Badge,
+  BranchIcon,
+  Button,
+  Card,
+  CommitIcon,
+  ErrorNote,
+  Input,
+  Label,
+  PageHeader,
+  Select,
+  Spinner,
+} from "@/components/ui";
 import { api } from "@/lib/api";
 import { shortSha } from "@/lib/format";
-import type { Deployment, FrameworkId, InspectResult, Project } from "@/lib/types";
+import type { Deployment, FrameworkId, GitHubRepository, InspectResult, PlatformConfig, Project } from "@/lib/types";
+import { useApi } from "@/lib/use-api";
 
 const EXAMPLES = [
   { label: "Vite + React", url: "https://github.com/SafdarJamal/vite-template-react" },
@@ -42,11 +56,11 @@ export default function NewProjectPage() {
   const [inspection, setInspection] = useState<InspectResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function inspect(url: string, branch?: string) {
+  async function inspect(url: string, branch?: string, rootDirectory?: string) {
     setInspecting(true);
     setError(null);
     try {
-      setInspection(await api<InspectResult>("/api/inspect", { method: "POST", body: { repoUrl: url, branch } }));
+      setInspection(await api<InspectResult>("/api/inspect", { method: "POST", body: { repoUrl: url, branch, rootDirectory } }));
     } catch (err) {
       setError((err as Error).message);
       setInspection(null);
@@ -62,8 +76,14 @@ export default function NewProjectPage() {
 
   return (
     <>
-      <PageHeader title="Import a Git repository" subtitle="Paste the URL of a public GitHub repository." />
+      <PageHeader title="Import a Git repository" subtitle="Pick a repository from GitHub, or paste the URL of a public one." />
       <div className="mx-auto max-w-3xl space-y-6 py-8">
+        <RepositoryPicker
+          onPick={(url) => {
+            setRepoUrl(url);
+            void inspect(url);
+          }}
+        />
         <Card className="p-6">
           <form onSubmit={onSubmit} className="flex gap-2">
             <Input
@@ -101,9 +121,10 @@ export default function NewProjectPage() {
 
         {inspection && (
           <Configure
-            key={`${inspection.repoUrl}@${inspection.branch}`}
+            key={`${inspection.repoUrl}@${inspection.branch}:${inspection.rootDirectory}`}
             inspection={inspection}
-            onBranchChange={(branch) => void inspect(inspection.repoUrl, branch)}
+            onBranchChange={(branch) => void inspect(inspection.repoUrl, branch, inspection.rootDirectory)}
+            onRootDirectoryChange={(dir) => void inspect(inspection.repoUrl, inspection.branch, dir)}
             onDeployed={(project, deployment) => router.push(`/${project.name}/deployments/${deployment.id}`)}
           />
         )}
@@ -115,16 +136,18 @@ export default function NewProjectPage() {
 function Configure({
   inspection,
   onBranchChange,
+  onRootDirectoryChange,
   onDeployed,
 }: {
   inspection: InspectResult;
   onBranchChange: (branch: string) => void;
+  onRootDirectoryChange: (dir: string) => void;
   onDeployed: (project: Project, deployment: Deployment) => void;
 }) {
   const s = inspection.settings;
   const [name, setName] = useState(inspection.suggestedName);
   const [framework, setFramework] = useState<FrameworkId>(s.framework);
-  const [rootDirectory, setRootDirectory] = useState("");
+  const [rootDirectory, setRootDirectory] = useState(inspection.rootDirectory === "." ? "" : inspection.rootDirectory);
   const [showBuild, setShowBuild] = useState(false);
   const [installCommand, setInstallCommand] = useState("");
   const [buildCommand, setBuildCommand] = useState("");
@@ -134,6 +157,7 @@ function Configure({
   const [error, setError] = useState<string | null>(null);
 
   const preset = inspection.presets.find((p) => p.id === framework);
+  const { data: config } = useApi<PlatformConfig>("/api/config");
 
   async function deploy() {
     setDeploying(true);
@@ -215,7 +239,7 @@ function Configure({
       <div className="space-y-5 p-6">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <Label hint={`${name || "name"}.localhost`}>Project Name</Label>
+            <Label hint={`${name || "name"}.${config?.rootDomain ?? "localhost"}`}>Project Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} />
           </div>
           <div>
@@ -230,8 +254,21 @@ function Configure({
           </div>
         </div>
         <div>
-          <Label hint="Leave empty for the repository root">Root Directory</Label>
-          <Input placeholder="./" value={rootDirectory} onChange={(e) => setRootDirectory(e.target.value)} />
+          <Label hint="For monorepos, e.g. apps/web. Leave empty for the repository root">Root Directory</Label>
+          <Input
+            placeholder="./"
+            value={rootDirectory}
+            onChange={(e) => setRootDirectory(e.target.value)}
+            onBlur={() => {
+              if ((rootDirectory || ".") !== inspection.rootDirectory) onRootDirectoryChange(rootDirectory || ".");
+            }}
+          />
+          {s.workspaceRoot && (
+            <p className="mt-2 text-xs text-muted">
+              Monorepo detected: dependencies install from{" "}
+              <span className="font-mono text-fg">{s.workspaceRoot === "." ? "the repository root" : s.workspaceRoot}</span>.
+            </p>
+          )}
         </div>
 
         <div className="rounded-md border border-line">
@@ -328,6 +365,64 @@ function Configure({
           Deploy
         </Button>
       </div>
+    </Card>
+  );
+}
+
+/** Repositories the Orbit GitHub App can access, including private ones. */
+function RepositoryPicker({ onPick }: { onPick: (url: string) => void }) {
+  const { data: config } = useApi<PlatformConfig>("/api/config");
+  const { data, error, loading } = useApi<{ repositories: GitHubRepository[] }>(
+    config?.githubApp ? "/api/github/repositories" : null,
+  );
+  const [query, setQuery] = useState("");
+
+  if (!config) return null;
+  if (!config.githubApp) {
+    return (
+      <p className="rounded-md border border-line px-4 py-3 text-[13px] text-muted">
+        To deploy private repositories and pick from a list,{" "}
+        <Link href="/settings" className="text-fg underline underline-offset-2">
+          connect GitHub
+        </Link>
+        .
+      </p>
+    );
+  }
+  const repos = (data?.repositories ?? []).filter((r) => r.fullName.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+  return (
+    <Card>
+      <div className="border-b border-line p-4">
+        <Input placeholder="Search your repositories…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      </div>
+      {error && (
+        <div className="p-4">
+          <ErrorNote>{error.message}</ErrorNote>
+        </div>
+      )}
+      {loading && !data && (
+        <p className="flex items-center gap-2 p-4 text-sm text-muted">
+          <Spinner /> Loading repositories…
+        </p>
+      )}
+      {data && repos.length === 0 && (
+        <p className="p-4 text-sm text-muted">
+          No repositories found. Install the GitHub App on more repositories in{" "}
+          <Link href="/settings" className="text-fg underline underline-offset-2">
+            Settings
+          </Link>
+          .
+        </p>
+      )}
+      {repos.map((r) => (
+        <div key={r.fullName} className="flex items-center gap-3 border-b border-line px-4 py-3 last:border-b-0">
+          <span className="truncate text-sm text-fg">{r.fullName}</span>
+          {r.private && <Badge>Private</Badge>}
+          <Button size="sm" variant="primary" className="ml-auto" onClick={() => onPick(r.url)}>
+            Import
+          </Button>
+        </div>
+      ))}
     </Card>
   );
 }

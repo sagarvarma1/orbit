@@ -58,9 +58,20 @@ export const config = {
   /** Enables commit statuses and PR preview comments. Needs "Commit statuses" and "Pull requests" write access. */
   githubToken: process.env.GITHUB_TOKEN ?? "",
   githubApiUrl: str("GITHUB_API_URL", "https://api.github.com"),
+  /** github.com, or a fake in tests; where the app-creation form is posted. */
+  githubWebUrl: str("GITHUB_WEB_URL", "https://github.com"),
+  /** The server's public IPv4, shown in DNS instructions. Defaults to what the dashboard's hostname resolves to. */
+  publicIp: process.env.ORBIT_PUBLIC_IP ?? "",
   /** Where the dashboard lives, for "Inspect" links posted to GitHub. */
   dashboardUrl: str("ORBIT_DASHBOARD_URL", "http://localhost:3000").replace(/\/$/, ""),
   gitPollIntervalSeconds: int("GIT_POLL_INTERVAL_SECONDS", 0),
+  /** Creates the admin account on first boot instead of the setup-code flow (automation, tests). */
+  adminEmail: process.env.ORBIT_ADMIN_EMAIL ?? "",
+  adminPassword: process.env.ORBIT_ADMIN_PASSWORD ?? "",
+  /** Sets a new password for the admin on boot (forgotten password). Remove it afterwards. */
+  resetAdminPassword: process.env.ORBIT_RESET_ADMIN_PASSWORD ?? "",
+  /** Trust X-Forwarded-* from a reverse proxy (Caddy) for client IPs and protocol. */
+  trustProxy: process.env.TRUST_PROXY === "1",
   /** Allow file:// and local path repositories (used by the e2e tests). */
   allowLocalRepos: process.env.ORBIT_ALLOW_LOCAL_REPOS === "1",
 } as const;

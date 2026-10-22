@@ -2,6 +2,8 @@ import type { Config } from "./config.js";
 import type { Deployment, Project, Repo } from "./db/repo.js";
 import type { LogStore } from "./build/logs.js";
 import type { DeploymentService } from "./services/deployments.js";
+import type { AuthService } from "./services/auth.js";
+import type { GitHubApp } from "./services/github-app.js";
 import type { GitSync } from "./services/git-sync.js";
 import { NotFoundError } from "./lib/errors.js";
 import { publicUrl } from "./lib/urls.js";
@@ -13,6 +15,8 @@ export interface AppContext {
   logs: LogStore;
   deployments: DeploymentService;
   git: GitSync;
+  auth: AuthService;
+  githubApp: GitHubApp;
 }
 
 export function requireProject(ctx: AppContext, idOrName: string): Project {
@@ -45,6 +49,9 @@ export function serializeProject(ctx: AppContext, p: Project) {
   return {
     ...p,
     productionUrl: publicUrl(ctx.config, p.name),
+    customDomains: ctx.repo
+      .listDomains(p.id)
+      .map((d) => ({ hostname: d.hostname, branch: d.branch, url: `${ctx.config.publicProtocol}://${d.hostname}` })),
     production: production ? serializeDeployment(ctx, production, productionId) : null,
     latestDeployment: latest ? serializeDeployment(ctx, latest, productionId) : null,
   };

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { useApi } from "@/lib/use-api";
 import type { PlatformConfig } from "@/lib/types";
+import { useAuth } from "./auth";
 import { Logo } from "./logo";
 
 function Slash() {
@@ -17,7 +18,8 @@ function Slash() {
 export function Header() {
   const params = useParams<{ project?: string; id?: string }>();
   const pathname = usePathname();
-  const { data: config } = useApi<PlatformConfig>("/api/config", 3000);
+  const { user, logout } = useAuth();
+  const { data: config } = useApi<PlatformConfig>(user ? "/api/config" : null, 3000);
   const building = config ? config.queue.running + config.queue.queued : 0;
 
   return (
@@ -48,7 +50,17 @@ export function Header() {
               {building ? `${config.queue.running} building · ${config.queue.queued} queued` : "Builders idle"}
             </span>
           )}
-          {pathname !== "/" && pathname !== "/new" && (
+          {user && (
+            <>
+              <Link href="/settings" className={pathname.startsWith("/settings") ? "text-white" : "hover:text-fg"}>
+                Settings
+              </Link>
+              <button type="button" onClick={() => void logout()} className="hover:text-fg" title={user.email}>
+                Log out
+              </button>
+            </>
+          )}
+          {user && pathname !== "/" && pathname !== "/new" && (
             <Link href="/new" className="rounded-md bg-white px-3 py-1.5 text-[13px] font-medium text-black hover:bg-white/90">
               New Project
             </Link>

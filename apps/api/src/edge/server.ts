@@ -26,6 +26,8 @@ export interface ResolvedTarget {
 /** How the edge finds out what a hostname points at. Backed by SQLite in production, a Map in tests. */
 export interface TargetLookup {
   resolve(label: string): ResolvedTarget | null;
+  /** Custom domains (anything not under the root domain). */
+  resolveDomain?(hostname: string): ResolvedTarget | null;
 }
 
 export interface EdgeOptions {
@@ -39,10 +41,15 @@ export interface EdgeOptions {
   log?: (message: string) => void;
 }
 
+/** "Example.com.:443" -> "example.com". */
+export function hostnameFromHost(host: string | undefined): string {
+  return (host ?? "").replace(/:\d+$/, "").replace(/\.$/, "").toLowerCase();
+}
+
 /** "abc.localhost:8080" -> "abc". Only single labels directly under the root domain route. */
 export function labelFromHost(host: string | undefined, rootDomain: string): string | null {
   if (!host) return null;
-  const hostname = host.replace(/:\d+$/, "").replace(/\.$/, "").toLowerCase();
+  const hostname = hostnameFromHost(host);
   const suffix = `.${rootDomain}`;
   if (!hostname.endsWith(suffix)) return null;
   const label = hostname.slice(0, -suffix.length);
@@ -218,7 +225,8 @@ export function createEdgeHandler(opts: EdgeOptions) {
     const method = req.method ?? "GET";
     res.setHeader("server", "orbit-edge");
     const label = labelFromHost(req.headers.host, opts.rootDomain);
-    if (!label) {
+    const domain = label ? null : opts.lookup.resolveDomain?.(hostnameFromHost(req.headers.host));
+    if (!label && !domain) {
       return sendPage(res, method, {
         status: 404,
         code: "NO_DEPLOYMENT",
@@ -227,7 +235,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
       });
     }
 
-    const target = opts.lookup.resolve(label);
+    const target = label ? opts.lookup.resolve(label) : domain!;
     if (!target)
       return sendPage(res, method, { status: 404, code: "DEPLOYMENT_NOT_FOUND", title: "This deployment could not be found" });
     if (target.status === "queued" || target.status === "building") {

@@ -1,4 +1,4 @@
-import { parseRepoUrl } from "../build/git.js";
+import { type GitCredentials, parseRepoUrl } from "../build/git.js";
 import type { Deployment, Project } from "../db/repo.js";
 
 /** What a deployment looks like from GitHub's side. Queued deployments report as building. */
@@ -14,9 +14,12 @@ export interface DeploymentLinks {
 }
 
 export interface GitHubOptions {
+  /** Personal access token (fallback when no GitHub App is installed on the repo). */
   token: string;
   /** https://api.github.com, or a fake server in tests. */
   apiUrl: string;
+  /** The GitHub App, whose installation tokens are preferred. */
+  app?: GitCredentials & { readonly configured: boolean };
 }
 
 type Log = (message: string) => void;
@@ -43,7 +46,7 @@ export class GitHubNotifier {
   constructor(private readonly opts: GitHubOptions) {}
 
   get enabled(): boolean {
-    return Boolean(this.opts.token);
+    return Boolean(this.opts.token) || Boolean(this.opts.app?.configured);
   }
 
   notify(project: Project, deployment: Deployment, state: GitHubState, links: DeploymentLinks, log: Log): Promise<void> {
@@ -72,8 +75,10 @@ export class GitHubNotifier {
     links: DeploymentLinks,
     log: Log,
   ): Promise<void> {
+    const token = (await this.opts.app?.tokenFor(project.repoUrl)) ?? this.opts.token;
+    if (!token) return; // The app isn't installed on this repository and there's no PAT.
     const { state: statusState, description } = STATUS[state];
-    await this.request("POST", `/repos/${fullName}/statuses/${deployment.commitSha}`, {
+    await this.request(token, "POST", `/repos/${fullName}/statuses/${deployment.commitSha}`, {
       state: statusState,
       description,
       context: `Orbit – ${project.name}`,
@@ -84,35 +89,48 @@ export class GitHubNotifier {
 
     const owner = fullName.split("/")[0]!;
     const pulls = (await this.request(
+      token,
       "GET",
       `/repos/${fullName}/pulls?state=open&per_page=10&head=${encodeURIComponent(`${owner}:${deployment.branch}`)}`,
     )) as { number: number }[];
     for (const pull of pulls) {
-      const action = await this.upsertComment(fullName, pull.number, project.id, commentBody(project, deployment, state, links));
+      const action = await this.upsertComment(
+        token,
+        fullName,
+        pull.number,
+        project.id,
+        commentBody(project, deployment, state, links),
+      );
       log(`GitHub: ${action} preview comment on pull request #${pull.number}`);
     }
   }
 
-  private async upsertComment(fullName: string, issue: number, projectId: string, body: string): Promise<"posted" | "updated"> {
-    const comments = (await this.request("GET", `/repos/${fullName}/issues/${issue}/comments?per_page=100`)) as {
+  private async upsertComment(
+    token: string,
+    fullName: string,
+    issue: number,
+    projectId: string,
+    body: string,
+  ): Promise<"posted" | "updated"> {
+    const comments = (await this.request(token, "GET", `/repos/${fullName}/issues/${issue}/comments?per_page=100`)) as {
       id: number;
       body?: string;
     }[];
     const existing = comments.find((c) => c.body?.includes(marker(projectId)));
     if (existing) {
-      await this.request("PATCH", `/repos/${fullName}/issues/comments/${existing.id}`, { body });
+      await this.request(token, "PATCH", `/repos/${fullName}/issues/comments/${existing.id}`, { body });
       return "updated";
     }
-    await this.request("POST", `/repos/${fullName}/issues/${issue}/comments`, { body });
+    await this.request(token, "POST", `/repos/${fullName}/issues/${issue}/comments`, { body });
     return "posted";
   }
 
-  private async request(method: string, urlPath: string, body?: unknown): Promise<unknown> {
+  private async request(token: string, method: string, urlPath: string, body?: unknown): Promise<unknown> {
     const res = await fetch(`${this.opts.apiUrl.replace(/\/$/, "")}${urlPath}`, {
       method,
       headers: {
         accept: "application/vnd.github+json",
-        authorization: `Bearer ${this.opts.token}`,
+        authorization: `Bearer ${token}`,
         "x-github-api-version": "2022-11-28",
         "user-agent": "orbit-deploy",
         ...(body ? { "content-type": "application/json" } : {}),
@@ -124,7 +142,7 @@ export class GitHubNotifier {
     if (!res.ok) {
       const hint =
         res.status === 401
-          ? " (is GITHUB_TOKEN valid?)"
+          ? " (is the token valid?)"
           : res.status === 403 || res.status === 404
             ? " (check the token's repository access and permissions)"
             : "";

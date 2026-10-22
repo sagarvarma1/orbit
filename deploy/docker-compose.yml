@@ -1,0 +1,68 @@
+# Production Orbit: prebuilt images behind Caddy (automatic HTTPS).
+# install.sh puts this file, the Caddyfile and a generated .env in /opt/orbit.
+#
+#   cd /opt/orbit && docker compose up -d
+#
+# Builds run in sibling containers through the host's Docker socket, so bind mounts must use
+# host paths: ORBIT_DATA_DIR on the host is mounted at the same path inside the containers.
+
+x-orbit-env: &orbit-env
+  ORBIT_DATA_DIR: ${ORBIT_DATA_DIR:-/opt/orbit/data}
+  ORBIT_ROOT_DOMAIN: ${ORBIT_ROOT_DOMAIN:?set ORBIT_ROOT_DOMAIN in .env}
+  ORBIT_PUBLIC_PROTOCOL: https
+  ORBIT_PUBLIC_EDGE_PORT: "443"
+  NODE_ENV: production
+
+services:
+  api:
+    image: ${ORBIT_IMAGE_PREFIX:-ghcr.io/sagarvarma1/orbit}-api:${ORBIT_VERSION:-latest}
+    environment:
+      <<: *orbit-env
+      ORBIT_HOST_DATA_DIR: ${ORBIT_DATA_DIR:-/opt/orbit/data}
+      ORBIT_DASHBOARD_URL: https://${ORBIT_APP_DOMAIN:?set ORBIT_APP_DOMAIN in .env}
+      ORBIT_BUILDER: docker
+      TRUST_PROXY: "1"
+      BUILD_CONCURRENCY: ${BUILD_CONCURRENCY:-2}
+      BUILD_TIMEOUT_SECONDS: ${BUILD_TIMEOUT_SECONDS:-600}
+      BUILD_MEMORY: ${BUILD_MEMORY:-2g}
+      BUILD_CPUS: ${BUILD_CPUS:-2}
+      GIT_POLL_INTERVAL_SECONDS: ${GIT_POLL_INTERVAL_SECONDS:-60}
+      ORBIT_PUBLIC_IP: ${ORBIT_PUBLIC_IP:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      ORBIT_RESET_ADMIN_PASSWORD: ${ORBIT_RESET_ADMIN_PASSWORD:-}
+    volumes:
+      - ${ORBIT_DATA_DIR:-/opt/orbit/data}:${ORBIT_DATA_DIR:-/opt/orbit/data}
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  edge:
+    image: ${ORBIT_IMAGE_PREFIX:-ghcr.io/sagarvarma1/orbit}-api:${ORBIT_VERSION:-latest}
+    command: ["node", "--disable-warning=ExperimentalWarning", "dist/edge.js"]
+    environment:
+      <<: *orbit-env
+    volumes:
+      - ${ORBIT_DATA_DIR:-/opt/orbit/data}:${ORBIT_DATA_DIR:-/opt/orbit/data}
+    restart: unless-stopped
+
+  dashboard:
+    image: ${ORBIT_IMAGE_PREFIX:-ghcr.io/sagarvarma1/orbit}-dashboard:${ORBIT_VERSION:-latest}
+    depends_on: [api]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      ORBIT_APP_DOMAIN: ${ORBIT_APP_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [api, edge, dashboard]
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

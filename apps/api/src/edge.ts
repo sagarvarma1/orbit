@@ -8,6 +8,7 @@ import { openDb } from "./db/index.js";
 import { Repo } from "./db/repo.js";
 import { createEdgeHandler, type TargetLookup } from "./edge/server.js";
 import { DEPLOYMENT_ID_RE } from "./lib/ids.js";
+import { branchAliasLabel } from "./lib/urls.js";
 
 const repo = new Repo(openDb(config.dbPath));
 
@@ -18,6 +19,13 @@ const lookup: TargetLookup = {
     if (!deploymentId) return null;
     const deployment = repo.getDeployment(deploymentId);
     return deployment ? { deploymentId: deployment.id, status: deployment.status } : null;
+  },
+  /** A custom domain follows its project's production alias, or a branch alias. */
+  resolveDomain(hostname) {
+    const domain = repo.getDomain(hostname);
+    const project = domain && repo.getProject(domain.projectId);
+    if (!domain || !project) return null;
+    return this.resolve(domain.branch ? branchAliasLabel(project.name, domain.branch) : project.name);
   },
 };
 

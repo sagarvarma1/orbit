@@ -4,8 +4,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useProject } from "@/components/project-context";
 import { Button, Card, ErrorNote, Input, Label, Select } from "@/components/ui";
-import { API_URL, api } from "@/lib/api";
-import type { FrameworkId, PlatformConfig } from "@/lib/types";
+import { api, apiOrigin } from "@/lib/api";
+import type { DomainStatus, FrameworkId, PlatformConfig } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 
 export default function SettingsPage() {
@@ -55,7 +55,7 @@ export default function SettingsPage() {
     router.push("/");
   }
 
-  const webhookUrl = `${API_URL}/api/webhooks/github`;
+  const webhookUrl = `${apiOrigin()}/api/webhooks/github`;
 
   return (
     <div className="space-y-8 py-8">
@@ -127,6 +127,8 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      <DomainsSection projectName={project.name} productionBranch={project.productionBranch} />
+
       <Card className="space-y-4 p-6">
         <div>
           <h2 className="font-medium text-white">Git</h2>
@@ -166,5 +168,109 @@ export default function SettingsPage() {
         </Button>
       </Card>
     </div>
+  );
+}
+
+function DomainsSection({ projectName, productionBranch }: { projectName: string; productionBranch: string }) {
+  const path = `/api/projects/${projectName}/domains`;
+  const { data, refresh } = useApi<{ domains: DomainStatus[] }>(path);
+  const [hostname, setHostname] = useState("");
+  const [branch, setBranch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api(path, { method: "POST", body: { hostname, branch: branch.trim() || null } });
+      setHostname("");
+      setBranch("");
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(domain: string) {
+    if (!confirm(`Remove ${domain}? It stops serving this project immediately.`)) return;
+    await api(`${path}/${encodeURIComponent(domain)}`, { method: "DELETE" });
+    await refresh();
+  }
+
+  return (
+    <Card>
+      <div className="space-y-4 p-6">
+        <div>
+          <h2 className="font-medium text-white">Domains</h2>
+          <p className="mt-1 text-sm text-muted">
+            Serve this project on your own domain. HTTPS certificates are issued automatically once DNS points at Orbit.
+          </p>
+        </div>
+        <form onSubmit={add} className="flex flex-col gap-2 sm:flex-row">
+          <Input placeholder="www.example.com" value={hostname} onChange={(e) => setHostname(e.target.value)} required />
+          <Input
+            placeholder={`Branch (default: production, ${productionBranch})`}
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            className="sm:w-72"
+          />
+          <Button type="submit" loading={busy}>
+            Add
+          </Button>
+        </form>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        {data && data.domains.length > 0 && (
+          <div className="rounded-md border border-line">
+            {data.domains.map((d) => (
+              <div key={d.hostname} className="space-y-3 border-b border-line px-4 py-4 last:border-b-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <a href={d.url} target="_blank" rel="noreferrer" className="text-sm text-white hover:underline">
+                    {d.hostname}
+                  </a>
+                  {d.branch && <span className="font-mono text-xs text-muted">{d.branch}</span>}
+                  <span
+                    className={
+                      d.dns.configured === true
+                        ? "text-xs text-ok"
+                        : d.dns.configured === false
+                          ? "text-xs text-warn"
+                          : "text-xs text-muted"
+                    }
+                  >
+                    {d.dns.configured === true
+                      ? "Valid configuration"
+                      : d.dns.configured === false
+                        ? "DNS not configured"
+                        : "DNS not checked"}
+                  </span>
+                  <Button size="sm" variant="ghost" className="ml-auto" onClick={() => remove(d.hostname)}>
+                    Remove
+                  </Button>
+                </div>
+                {d.dns.configured !== true && (
+                  <div className="space-y-2 text-[13px] text-muted">
+                    <p>{d.dns.detail}</p>
+                    {d.dns.record && (
+                      <div className="grid grid-cols-3 gap-2 rounded-md border border-line bg-bg px-3 py-2 font-mono text-xs">
+                        <span className="text-subtle">Type</span>
+                        <span className="text-subtle">Name</span>
+                        <span className="text-subtle">Value</span>
+                        <span className="text-fg">{d.dns.record.type}</span>
+                        <span className="text-fg">{d.dns.record.name}</span>
+                        <span className="break-all text-fg">{d.dns.record.value}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }

@@ -6,6 +6,7 @@ export type PackageManager = "npm" | "pnpm" | "yarn";
 
 export interface PackageJson {
   name?: string;
+  workspaces?: unknown;
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
@@ -19,6 +20,17 @@ export interface RepoSnapshot {
   packageJson: PackageJson | null;
   /** Contents of next.config.* if present. */
   nextConfig?: string;
+}
+
+/**
+ * The monorepo root above the project, when the project lives in a workspace (pnpm, yarn or npm
+ * workspaces, Turborepo). Dependencies are installed there, not in the project directory.
+ */
+export interface WorkspaceRoot {
+  /** Path of the workspace root relative to the repository root ("." for the repo root). */
+  directory: string;
+  files: string[];
+  packageJson: PackageJson | null;
 }
 
 export interface FrameworkPreset {
@@ -52,6 +64,10 @@ export interface BuildSettings {
   spa: boolean;
   cleanUrls: boolean;
   warnings: string[];
+  /** Set for monorepo projects: install (and Turborepo builds) run from here, relative to the repo root. */
+  workspaceRoot: string | null;
+  /** Where the build command runs: the project directory, or the workspace root (Turborepo). */
+  buildFrom: "project" | "workspace";
 }
 
 export interface BuildOverrides {
@@ -99,17 +115,32 @@ function installCommandFor(pm: PackageManager, files: Set<string>): string {
 }
 
 /** Detect framework + commands, then apply user overrides (overrides always win). */
-export function resolveBuildSettings(snapshot: RepoSnapshot, overrides: BuildOverrides = {}): BuildSettings {
+export function resolveBuildSettings(
+  snapshot: RepoSnapshot,
+  overrides: BuildOverrides = {},
+  workspace: WorkspaceRoot | null = null,
+): BuildSettings {
   const files = new Set(snapshot.files);
   const warnings: string[] = [];
   const framework = overrides.framework ?? detectFrameworkId(snapshot);
   const preset = PRESETS[framework];
-  const pm = detectPackageManager(snapshot);
+  // In a monorepo the lockfile and package manager are declared at the workspace root.
+  const installFiles = new Set(workspace ? workspace.files : snapshot.files);
+  const pm = workspace
+    ? detectPackageManager({ files: workspace.files, packageJson: workspace.packageJson ?? snapshot.packageJson })
+    : detectPackageManager(snapshot);
 
-  if (files.has("bun.lockb") || files.has("bun.lock")) warnings.push("bun lockfile found; Orbit builds with npm instead.");
+  if (installFiles.has("bun.lockb") || installFiles.has("bun.lock"))
+    warnings.push("bun lockfile found; Orbit builds with npm instead.");
 
-  let installCommand: string | null = pm ? installCommandFor(pm, files) : null;
+  let installCommand: string | null = pm ? installCommandFor(pm, installFiles) : null;
   let buildCommand: string | null = pm && snapshot.packageJson?.scripts?.build ? `${pm} run build` : null;
+  let buildFrom: BuildSettings["buildFrom"] = "project";
+  // Turborepo builds the project's internal dependencies first; plain `run build` wouldn't.
+  if (workspace && buildCommand && installFiles.has("turbo.json") && snapshot.packageJson?.name) {
+    buildCommand = `npx turbo run build --filter=${snapshot.packageJson.name}`;
+    buildFrom = "workspace";
+  }
   let outputDirectory = preset.outputDirectory;
 
   if (framework === "static" && !files.has("index.html") && files.has("public")) outputDirectory = "public";
@@ -123,7 +154,10 @@ export function resolveBuildSettings(snapshot: RepoSnapshot, overrides: BuildOve
 
   if (overrides.installCommand !== undefined && overrides.installCommand !== null)
     installCommand = overrides.installCommand || null;
-  if (overrides.buildCommand !== undefined && overrides.buildCommand !== null) buildCommand = overrides.buildCommand || null;
+  if (overrides.buildCommand !== undefined && overrides.buildCommand !== null) {
+    buildCommand = overrides.buildCommand || null;
+    buildFrom = "project";
+  }
   if (overrides.outputDirectory) outputDirectory = overrides.outputDirectory;
 
   return {
@@ -136,7 +170,32 @@ export function resolveBuildSettings(snapshot: RepoSnapshot, overrides: BuildOve
     spa: preset.spa,
     cleanUrls: preset.cleanUrls,
     warnings,
+    workspaceRoot: workspace?.directory ?? null,
+    buildFrom,
   };
+}
+
+const LOCKFILES = ["pnpm-lock.yaml", "yarn.lock", "package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb"];
+
+/**
+ * For a project in a subdirectory without its own lockfile, the nearest ancestor (up to the repo
+ * root) that has one, or that declares workspaces. null for standalone projects.
+ */
+export function findWorkspaceRoot(repoDir: string, rootDirectory: string): WorkspaceRoot | null {
+  if (rootDirectory === ".") return null;
+  const projectDir = path.join(repoDir, rootDirectory);
+  if (LOCKFILES.some((f) => fs.existsSync(path.join(projectDir, f)))) return null;
+  let rel = path.posix.dirname(rootDirectory);
+  for (;;) {
+    const dir = path.join(repoDir, rel);
+    const snapshot = readSnapshot(dir);
+    const declaresWorkspaces = snapshot.files.includes("pnpm-workspace.yaml") || Boolean(snapshot.packageJson?.workspaces);
+    if (declaresWorkspaces || LOCKFILES.some((f) => snapshot.files.includes(f))) {
+      return { directory: rel, files: snapshot.files, packageJson: snapshot.packageJson };
+    }
+    if (rel === ".") return null;
+    rel = path.posix.dirname(rel);
+  }
 }
 
 /** Normalizes a user-supplied relative path and refuses anything that escapes the repo. */

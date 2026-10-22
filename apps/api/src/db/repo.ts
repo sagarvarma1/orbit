@@ -62,7 +62,55 @@ export interface Alias {
   updatedAt: number;
 }
 
+export interface Domain {
+  hostname: string;
+  projectId: string;
+  /** null = production; otherwise the latest deployment of this branch. */
+  branch: string | null;
+  createdAt: number;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: number;
+}
+
+export interface ApiToken {
+  id: string;
+  userId: string;
+  name: string;
+  /** First characters of the token, so people can tell tokens apart. */
+  prefix: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
 type Row = Record<string, unknown>;
+
+const toDomain = (r: Row): Domain => ({
+  hostname: r.hostname as string,
+  projectId: r.project_id as string,
+  branch: (r.branch as string | null) ?? null,
+  createdAt: Number(r.created_at),
+});
+
+const toUser = (r: Row): User => ({
+  id: r.id as string,
+  email: r.email as string,
+  passwordHash: r.password_hash as string,
+  createdAt: Number(r.created_at),
+});
+
+const toApiToken = (r: Row): ApiToken => ({
+  id: r.id as string,
+  userId: r.user_id as string,
+  name: r.name as string,
+  prefix: r.prefix as string,
+  createdAt: Number(r.created_at),
+  lastUsedAt: r.last_used_at == null ? null : Number(r.last_used_at),
+});
 
 const toProject = (r: Row): Project => ({
   id: r.id as string,
@@ -363,5 +411,131 @@ export class Repo {
          ON CONFLICT(project_id, branch) DO UPDATE SET sha = excluded.sha`,
       )
       .run(projectId, branch, sha);
+  }
+
+  // ----------------------------------------------------------------- domains
+
+  listDomains(projectId?: string): Domain[] {
+    const rows = projectId
+      ? this.db.prepare("SELECT * FROM domains WHERE project_id = ? ORDER BY created_at").all(projectId)
+      : this.db.prepare("SELECT * FROM domains ORDER BY created_at").all();
+    return (rows as Row[]).map(toDomain);
+  }
+
+  getDomain(hostname: string): Domain | undefined {
+    const row = this.db.prepare("SELECT * FROM domains WHERE hostname = ?").get(hostname) as Row | undefined;
+    return row ? toDomain(row) : undefined;
+  }
+
+  insertDomain(d: Domain): void {
+    this.db
+      .prepare("INSERT INTO domains (hostname, project_id, branch, created_at) VALUES (?, ?, ?, ?)")
+      .run(d.hostname, d.projectId, d.branch, d.createdAt);
+  }
+
+  deleteDomain(hostname: string): boolean {
+    return this.db.prepare("DELETE FROM domains WHERE hostname = ?").run(hostname).changes > 0;
+  }
+
+  // ------------------------------------------------------------------- users
+
+  countUsers(): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM users").get() as Row).n);
+  }
+
+  firstUser(): User | undefined {
+    const row = this.db.prepare("SELECT * FROM users ORDER BY created_at LIMIT 1").get() as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+
+  getUserByEmail(email: string): User | undefined {
+    const row = this.db.prepare("SELECT * FROM users WHERE email = ?").get(email) as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+
+  getUser(id: string): User | undefined {
+    const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+
+  insertUser(u: User): void {
+    this.db
+      .prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
+      .run(u.id, u.email, u.passwordHash, u.createdAt);
+  }
+
+  updateUserPassword(id: string, passwordHash: string): void {
+    this.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, id);
+  }
+
+  insertSession(tokenHash: string, userId: string, expiresAt: number): void {
+    this.db
+      .prepare("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .run(tokenHash, userId, Date.now(), expiresAt);
+  }
+
+  /** The user behind a live session, or undefined. Expired sessions are swept as a side effect. */
+  sessionUser(tokenHash: string): User | undefined {
+    const now = Date.now();
+    this.db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(now);
+    const row = this.db
+      .prepare("SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash = ?")
+      .get(tokenHash) as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+
+  deleteSession(tokenHash: string): void {
+    this.db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(tokenHash);
+  }
+
+  deleteUserSessions(userId: string): void {
+    this.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+  }
+
+  listApiTokens(userId: string): ApiToken[] {
+    const rows = this.db.prepare("SELECT * FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC").all(userId) as Row[];
+    return rows.map(toApiToken);
+  }
+
+  insertApiToken(t: ApiToken & { tokenHash: string }): void {
+    this.db
+      .prepare("INSERT INTO api_tokens (id, user_id, name, token_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(t.id, t.userId, t.name, t.tokenHash, t.prefix, t.createdAt);
+  }
+
+  /** The user an API token belongs to, recording when it was last used. */
+  apiTokenUser(tokenHash: string): User | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT users.*, api_tokens.id AS token_id FROM api_tokens JOIN users ON users.id = api_tokens.user_id WHERE token_hash = ?",
+      )
+      .get(tokenHash) as Row | undefined;
+    if (!row) return undefined;
+    this.db.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").run(Date.now(), row.token_id as string);
+    return toUser(row);
+  }
+
+  deleteApiToken(userId: string, id: string): boolean {
+    return this.db.prepare("DELETE FROM api_tokens WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
+  }
+
+  // ---------------------------------------------------------------- settings
+
+  getSetting<T>(key: string): T | undefined {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as Row | undefined;
+    return row ? (JSON.parse(row.value as string) as T) : undefined;
+  }
+
+  setSetting(key: string, value: unknown): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(key, JSON.stringify(value), Date.now());
+  }
+
+  deleteSetting(key: string): void {
+    this.db.prepare("DELETE FROM settings WHERE key = ?").run(key);
   }
 }
