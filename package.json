@@ -1,0 +1,21 @@
+{
+  "name": "orbit",
+  "private": true,
+  "description": "Orbit: a small, self-hostable deployment platform (mini Vercel).",
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "pnpm -r build",
+    "test": "pnpm --filter @orbit/api test",
+    "typecheck": "pnpm -r typecheck",
+    "e2e": "node scripts/e2e.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10"
+  }
+}

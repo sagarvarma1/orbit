@@ -1,0 +1,41 @@
+# Orbit behind Caddy with a wildcard certificate.
+# Replace example.com, and build Caddy with your DNS provider module (see docs/DEPLOY_VPS.md).
+{
+	email you@example.com
+}
+
+# Dashboard + API on one origin, so browser basic auth also covers fetch() and EventSource.
+app.example.com {
+	encode zstd gzip
+
+	# GitHub must reach the webhook without basic auth (it's HMAC-verified instead).
+	@webhook path /api/webhooks/github
+	handle @webhook {
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	handle /api/* {
+		basic_auth {
+			# caddy hash-password --plaintext 'your-password'
+			admin $2a$14$REPLACE_WITH_HASH
+		}
+		# SSE: Caddy flushes text/event-stream responses immediately.
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	handle {
+		basic_auth {
+			admin $2a$14$REPLACE_WITH_HASH
+		}
+		reverse_proxy 127.0.0.1:3000
+	}
+}
+
+# Every deployment and alias: <deployment-id>.example.com, <project>.example.com, <project>-git-<branch>.example.com
+*.example.com {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}

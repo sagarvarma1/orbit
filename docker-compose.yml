@@ -1,0 +1,54 @@
+# docker compose up --build
+#   Dashboard  http://localhost:3000
+#   API        http://localhost:4000
+#   Edge       http://<deployment>.localhost:8080, http://<project>.localhost:8080
+#
+# The control plane launches each build in its own sibling container through the host's
+# Docker socket. Bind mounts for those containers must be HOST paths, which is why ./data is
+# a bind mount and ORBIT_HOST_DATA_DIR is its absolute host path.
+
+x-orbit-env: &orbit-env
+  ORBIT_DATA_DIR: /data
+  ORBIT_ROOT_DOMAIN: ${ORBIT_ROOT_DOMAIN:-localhost}
+  ORBIT_PUBLIC_PROTOCOL: ${ORBIT_PUBLIC_PROTOCOL:-http}
+  ORBIT_PUBLIC_EDGE_PORT: ${ORBIT_PUBLIC_EDGE_PORT:-8080}
+
+services:
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      <<: *orbit-env
+      ORBIT_HOST_DATA_DIR: ${ORBIT_HOST_DATA_DIR:-${PWD}/data}
+      ORBIT_BUILDER: ${ORBIT_BUILDER:-auto}
+      BUILD_CONCURRENCY: ${BUILD_CONCURRENCY:-2}
+      BUILD_TIMEOUT_SECONDS: ${BUILD_TIMEOUT_SECONDS:-600}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      ORBIT_DASHBOARD_URL: ${ORBIT_DASHBOARD_URL:-http://localhost:3000}
+      BUILD_CACHE: ${BUILD_CACHE:-1}
+      GIT_POLL_INTERVAL_SECONDS: ${GIT_POLL_INTERVAL_SECONDS:-10}
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports: ["4000:4000"]
+    restart: unless-stopped
+
+  edge:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    command: ["node", "--disable-warning=ExperimentalWarning", "dist/edge.js"]
+    environment:
+      <<: *orbit-env
+    volumes:
+      - ./data:/data
+    ports: ["8080:8080"]
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    ports: ["3000:3000"]
+    depends_on: [api]
+    restart: unless-stopped
