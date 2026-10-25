@@ -117,12 +117,16 @@ describe("edge handler", () => {
         functions: [
           { route: "/api/echo", file: "functions/echo.mjs" },
           { route: "/api/slow", file: "functions/slow.mjs" },
+          { route: "/api/cached", file: "functions/cached.mjs" },
+          { route: "/api/fresh", file: "functions/fresh.mjs" },
         ],
       },
       {
         "static/index.html": "<h1>fn</h1>",
         "functions/echo.mjs": `export async function POST(req) { return Response.json({ got: await req.json(), env: process.env.GREETING }); }`,
         "functions/slow.mjs": `export default () => new Promise((resolve) => setTimeout(resolve, 60_000));`,
+        "functions/cached.mjs": `export function GET(req) { return new Response(String(Math.random()), { headers: { "cache-control": "public, s-maxage=60" } }); }`,
+        "functions/fresh.mjs": `export function GET() { return new Response(String(Math.random()), { headers: { "cache-control": "public, max-age=60" } }); }`,
         "function-env.json": JSON.stringify({ GREETING: "hi" }),
       },
     );
@@ -139,6 +143,7 @@ describe("edge handler", () => {
       lookup: { resolve: (label) => targets.get(label) ?? null },
       functionTimeoutMs: 1500,
       functionMemoryMb: 64,
+      functionCacheBytes: 1024 * 1024,
     });
     server = http.createServer((req, res) => void handle(req, res));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -246,10 +251,32 @@ describe("edge handler", () => {
 
   it("returns 405 for unsupported methods, 404 for unknown API routes and 504 on timeout", async () => {
     expect((await request("dpl-fn00000001.localhost", "/api/echo")).status).toBe(405);
+    expect((await request("dpl-fn00000001.localhost", "/api/echo")).headers["x-orbit-cache"]).toBe("MISS");
     expect((await request("dpl-fn00000001.localhost", "/api/unknown")).status).toBe(404);
     const slow = await request("dpl-fn00000001.localhost", "/api/slow");
     expect(slow.status).toBe(504);
     expect(slow.body).toContain("FUNCTION_INVOCATION_TIMEOUT");
+  });
+
+  it("caches function responses that send s-maxage, per URL, like Vercel's CDN", async () => {
+    const host = "dpl-fn00000001.localhost";
+    const [first, second] = await Promise.all([request(host, "/api/cached?a=1"), request(host, "/api/cached?a=1")]);
+    expect(first.body).toBe(second.body); // concurrent misses share one invocation
+    const hit = await request(host, "/api/cached?a=1");
+    expect(hit.body).toBe(first.body);
+    expect(hit.headers["x-orbit-cache"]).toBe("HIT");
+    expect(hit.headers["age"]).toBe("0");
+    expect((await request(host, "/api/cached?a=2")).body).not.toBe(first.body);
+    // HEAD is answered from the same entry.
+    expect((await request(host, "/api/cached?a=1", { method: "HEAD" })).headers["x-orbit-cache"]).toBe("HIT");
+    // Authorized requests always run the function.
+    const authed = await request(host, "/api/cached?a=1", { headers: { authorization: "Bearer x" } });
+    expect(authed.body).not.toBe(first.body);
+    expect(authed.headers["x-orbit-cache"]).toBeUndefined();
+    // Plain max-age is for browsers: not cached at the edge.
+    const fresh = [await request(host, "/api/fresh"), await request(host, "/api/fresh")];
+    expect(fresh[0]!.body).not.toBe(fresh[1]!.body);
+    expect(fresh[1]!.headers["x-orbit-cache"]).toBe("MISS");
   });
 
   it("resolveStatic never escapes the static dir", () => {

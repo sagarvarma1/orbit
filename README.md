@@ -154,28 +154,30 @@ The GitHub App flow works locally too; its webhook is simply left inactive.
 
 ## Configuration
 
-| Variable                                           | Default                 | Description                                                                      |
-| -------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------- |
-| `ORBIT_ROOT_DOMAIN`                                | `localhost`             | Deployments are served at `<label>.<root>`                                       |
-| `ORBIT_DASHBOARD_URL`                              | `http://localhost:3000` | Where the dashboard lives (CORS, cookies, GitHub App redirects, "Inspect" links) |
-| `ORBIT_PUBLIC_PROTOCOL` / `ORBIT_PUBLIC_EDGE_PORT` | `http` / `8080`         | How URLs are rendered (`https` / `443` behind Caddy)                             |
-| `ORBIT_PUBLIC_IP`                                  | (resolved)              | Server IP shown in DNS instructions for apex domains                             |
-| `ORBIT_ADMIN_EMAIL` / `ORBIT_ADMIN_PASSWORD`       | (empty)                 | Create the admin on first boot instead of using a setup code                     |
-| `ORBIT_RESET_ADMIN_PASSWORD`                       | (empty)                 | Set a new admin password on boot (remove it afterwards)                          |
-| `TRUST_PROXY`                                      | `0`                     | Trust `X-Forwarded-*` from a reverse proxy                                       |
-| `ORBIT_BUILDER`                                    | `auto`                  | `auto`, `docker` or `process`                                                    |
-| `ORBIT_BUILD_IMAGE`                                | `node:22-bookworm-slim` | Image for Docker builds                                                          |
-| `BUILD_CONCURRENCY` / `BUILD_TIMEOUT_SECONDS`      | `2` / `600`             | Queue limits                                                                     |
-| `BUILD_MEMORY` / `BUILD_CPUS`                      | `2g` / `2`              | Docker build limits                                                              |
-| `BUILD_CACHE`                                      | `1`                     | `0` disables the build cache                                                     |
-| `FUNCTION_TIMEOUT_MS` / `FUNCTION_MEMORY_MB`       | `10000` / `128`         | Function limits                                                                  |
-| `GIT_POLL_INTERVAL_SECONDS`                        | `0`                     | Poll branch heads (0 = off)                                                      |
-| `GITHUB_WEBHOOK_SECRET`                            | (empty)                 | For a manually added repository webhook (the GitHub App has its own secret)      |
-| `GITHUB_TOKEN`                                     | (empty)                 | Personal access token fallback for commit statuses and PR comments               |
-| `GITHUB_API_URL` / `GITHUB_WEB_URL`                | GitHub.com              | GitHub Enterprise, or fakes in tests                                             |
-| `ORBIT_DATA_DIR` / `ORBIT_HOST_DATA_DIR`           | `./data`                | SQLite DB, artifacts, logs, builds; host path when running in a container        |
-| `API_PORT` / `EDGE_PORT`                           | `4000` / `8080`         | Listen ports                                                                     |
-| `NEXT_PUBLIC_API_URL`                              | `http://localhost:4000` | API URL baked into the dashboard; empty = same origin (production images)        |
+| Variable                                                   | Default                 | Description                                                                      |
+| ---------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------- |
+| `ORBIT_ROOT_DOMAIN`                                        | `localhost`             | Deployments are served at `<label>.<root>`                                       |
+| `ORBIT_DASHBOARD_URL`                                      | `http://localhost:3000` | Where the dashboard lives (CORS, cookies, GitHub App redirects, "Inspect" links) |
+| `ORBIT_PUBLIC_PROTOCOL` / `ORBIT_PUBLIC_EDGE_PORT`         | `http` / `8080`         | How URLs are rendered (`https` / `443` behind Caddy)                             |
+| `ORBIT_PUBLIC_IP`                                          | (resolved)              | Server IP shown in DNS instructions for apex domains                             |
+| `ORBIT_ADMIN_EMAIL` / `ORBIT_ADMIN_PASSWORD`               | (empty)                 | Create the admin on first boot instead of using a setup code                     |
+| `ORBIT_RESET_ADMIN_PASSWORD`                               | (empty)                 | Set a new admin password on boot (remove it afterwards)                          |
+| `TRUST_PROXY`                                              | `0`                     | Trust `X-Forwarded-*` from a reverse proxy                                       |
+| `ORBIT_BUILDER`                                            | `auto`                  | `auto`, `docker` or `process`                                                    |
+| `ORBIT_BUILD_IMAGE`                                        | `node:22-bookworm-slim` | Image for Docker builds                                                          |
+| `BUILD_CONCURRENCY` / `BUILD_TIMEOUT_SECONDS`              | `2` / `600`             | Queue limits                                                                     |
+| `BUILD_MEMORY` / `BUILD_CPUS`                              | `2g` / `2`              | Docker build limits                                                              |
+| `BUILD_CACHE`                                              | `1`                     | `0` disables the build cache                                                     |
+| `FUNCTION_TIMEOUT_MS` / `FUNCTION_MEMORY_MB`               | `10000` / `128`         | Function limits                                                                  |
+| `FUNCTION_MAX_MEMORY_MB` / `FUNCTION_MAX_DURATION_SECONDS` | `1024` / `60`           | Upper bounds for per-function `memory` / `maxDuration` in vercel.json            |
+| `FUNCTION_CACHE_MB`                                        | `64`                    | Edge cache for function responses with `s-maxage` (`0` = off)                    |
+| `GIT_POLL_INTERVAL_SECONDS`                                | `0`                     | Poll branch heads (0 = off)                                                      |
+| `GITHUB_WEBHOOK_SECRET`                                    | (empty)                 | For a manually added repository webhook (the GitHub App has its own secret)      |
+| `GITHUB_TOKEN`                                             | (empty)                 | Personal access token fallback for commit statuses and PR comments               |
+| `GITHUB_API_URL` / `GITHUB_WEB_URL`                        | GitHub.com              | GitHub Enterprise, or fakes in tests                                             |
+| `ORBIT_DATA_DIR` / `ORBIT_HOST_DATA_DIR`                   | `./data`                | SQLite DB, artifacts, logs, builds; host path when running in a container        |
+| `API_PORT` / `EDGE_PORT`                                   | `4000` / `8080`         | Listen ports                                                                     |
+| `NEXT_PUBLIC_API_URL`                                      | `http://localhost:4000` | API URL baked into the dashboard; empty = same origin (production images)        |
 
 ## Testing
 

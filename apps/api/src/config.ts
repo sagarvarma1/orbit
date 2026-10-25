@@ -56,6 +56,8 @@ export const config = {
   /** Upper bounds for per-function `memory` / `maxDuration` in vercel.json. */
   functionMaxMemoryMb: int("FUNCTION_MAX_MEMORY_MB", 1024),
   functionMaxDurationSeconds: int("FUNCTION_MAX_DURATION_SECONDS", 60),
+  /** Edge memory for function responses with `s-maxage` (like Vercel's CDN). 0 turns it off. */
+  functionCacheMb: int("FUNCTION_CACHE_MB", 64),
 
   githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
   /** Enables commit statuses and PR preview comments. Needs "Commit statuses" and "Pull requests" write access. */

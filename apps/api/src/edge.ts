@@ -35,6 +35,7 @@ const handle = createEdgeHandler({
   lookup,
   functionTimeoutMs: config.functionTimeoutMs,
   functionMemoryMb: config.functionMemoryMb,
+  functionCacheBytes: config.functionCacheMb * 1024 * 1024,
   log: (message) => console.log(message),
 });
 

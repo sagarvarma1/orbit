@@ -6,6 +6,7 @@ import { createGzip } from "node:zlib";
 import type { DeploymentStatus } from "../db/repo.js";
 import { FUNCTION_ENV_FILE, MANIFEST_FILE, STATIC_DIR, type DeploymentManifest } from "../lib/manifest.js";
 import { compileRouting, type CompiledRouting } from "../lib/routing.js";
+import { FunctionCache } from "./function-cache.js";
 import { FunctionTimeoutError, invokeFunction, matchFunction } from "./functions.js";
 import { platformPage } from "./pages.js";
 import {
@@ -36,6 +37,8 @@ export interface EdgeOptions {
   lookup: TargetLookup;
   functionTimeoutMs: number;
   functionMemoryMb: number;
+  /** Memory for cached function responses (`s-maxage`); 0 turns the cache off. */
+  functionCacheBytes?: number;
   /** Max request body for functions (Vercel's limit is 4.5 MB). */
   maxBodyBytes?: number;
   log?: (message: string) => void;
@@ -67,10 +70,11 @@ interface LoadedDeployment {
 }
 
 /**
- * The edge request handler. Stateless apart from a manifest cache, which is safe because
- * artifacts are immutable: a deployment id's manifest can never change.
+ * The edge request handler. Stateless apart from a manifest cache and a function response cache,
+ * both safe because artifacts are immutable: a deployment id's output can never change.
  */
 export function createEdgeHandler(opts: EdgeOptions) {
+  const functionCache = opts.functionCacheBytes ? new FunctionCache(opts.functionCacheBytes) : null;
   const deployments = new Map<string, LoadedDeployment>();
   const maxBody = opts.maxBodyBytes ?? 4.5 * 1024 * 1024;
   /** Headers from the deployment's vercel.json, merged into whatever response the request ends with. */
@@ -143,17 +147,27 @@ export function createEdgeHandler(opts: EdgeOptions) {
       if (value !== undefined) headers[key] = Array.isArray(value) ? value.join(", ") : value;
 
     const started = Date.now();
-    try {
-      const out = await invokeFunction({
+    const invoke = (method: string) =>
+      invokeFunction({
         artifactDir,
         route: match.route,
         params: match.params,
-        request: { method: req.method!, url: url.toString(), headers, body: Buffer.concat(chunks) },
+        request: { method, url: url.toString(), headers, body: Buffer.concat(chunks) },
         env,
         timeoutMs: match.route.maxDurationMs ?? opts.functionTimeoutMs,
         memoryMb: match.route.memoryMb ?? opts.functionMemoryMb,
         onLog: (stream, text) => opts.log?.(`[fn ${manifest.deploymentId}${match.route.route}] ${stream}: ${text.trimEnd()}`),
       });
+    // GET and HEAD share one entry (HEAD drops the body). Authorized requests are never shared.
+    const cacheable = functionCache && (req.method === "GET" || req.method === "HEAD") && !req.headers.authorization;
+    try {
+      const {
+        response: out,
+        hit,
+        age,
+      } = cacheable
+        ? await functionCache.fetch(`${manifest.deploymentId} ${url.host}${url.pathname}${url.search}`, () => invoke("GET"))
+        : { response: await invoke(req.method!), hit: false, age: 0 };
       const responseHeaders: Record<string, string> = { "cache-control": "no-store", ...out.headers };
       delete responseHeaders["content-encoding"];
       delete responseHeaders["transfer-encoding"];
@@ -161,6 +175,8 @@ export function createEdgeHandler(opts: EdgeOptions) {
       responseHeaders["x-orbit-deployment"] = manifest.deploymentId;
       responseHeaders["x-orbit-function"] = match.route.route;
       responseHeaders["x-orbit-duration"] = `${Date.now() - started}ms`;
+      if (cacheable) responseHeaders["x-orbit-cache"] = hit ? "HIT" : "MISS";
+      if (hit) responseHeaders["age"] = String(age);
       writeHead(res, out.status, responseHeaders);
       res.end(req.method === "HEAD" ? undefined : out.body);
     } catch (err) {
