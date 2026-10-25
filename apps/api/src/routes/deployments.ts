@@ -60,7 +60,8 @@ export function deploymentRoutes(app: FastifyInstance, ctx: AppContext): void {
 
     // Everything below is synchronous, so the status can't change between check and subscribe.
     const current = requireDeployment(ctx, deployment.id);
-    const pending = current.status === "queued" || current.status === "building";
+    // A finished build's log stays open briefly while GitHub is notified; follow it until it closes.
+    const pending = current.status === "queued" || current.status === "building" || ctx.logs.isActive(deployment.id);
     unsubscribe = ctx.logs.follow(deployment.id, send, Number.isNaN(lastEventId) ? -1 : lastEventId, pending);
     if (!pending) send({ type: "end", status: current.status });
   });

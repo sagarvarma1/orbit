@@ -188,10 +188,13 @@ const fakeGitHub = http.createServer((req, res) => {
   req.on("end", () => {
     const body = raw ? JSON.parse(raw) : null;
     const url = new URL(req.url, "http://github");
-    const send = (status, data) => {
-      res.writeHead(status, { "content-type": "application/json" });
-      res.end(JSON.stringify(data));
-    };
+    // Comment calls answer slowly, like the real API, so the log stream must wait for them.
+    const delay = url.pathname.includes("/comments") ? 300 : 0;
+    const send = (status, data) =>
+      setTimeout(() => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(data));
+      }, delay);
     const status = /^\/repos\/([^/]+\/[^/]+)\/statuses\/(\w+)$/.exec(url.pathname);
     if (req.method === "POST" && status) return send(201, github.statuses.push({ repo: status[1], sha: status[2], ...body }));
     if (url.pathname.endsWith("/pulls")) return send(200, [{ number: 1 }]);
