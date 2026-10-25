@@ -1,80 +1,84 @@
-// Hero terminal: an illustrative Orbit build log (same format as the real one), replayed line by line.
-// `t` is the elapsed build time shown in the gutter; `wait` is the pause before the line appears.
-const LINES = [
-  { text: "$ git push origin main", cls: "t-cmd", wait: 900, typed: true },
-  { text: "Build started for orbit-demo (production)", t: 0.0, wait: 450 },
-  { text: 'Cloned 4f2a9c1 "Update hero copy" in 1.1s', t: 1.1, wait: 350 },
-  { text: "Framework: Vite · package manager: npm · builder: docker", t: 1.1, wait: 300 },
-  { text: "Routing from vercel.json: 1 redirect, 1 rewrite, 1 header rule", t: 1.1, wait: 300 },
-  { text: "Restored build cache (lockfile unchanged)", t: 1.3, wait: 500 },
-  { text: "Build completed in 3.8s", t: 5.1, wait: 900 },
-  { text: "Collected 9 static files (412.6 KB)", t: 5.2, wait: 250 },
-  { text: "Bundled 1 function(s): /api/hello", t: 5.4, wait: 250 },
-  { text: "GitHub: commit status set to success", t: 5.9, wait: 400 },
-  { text: "✓ Ready  https://orbit-demo.orbitdeploy.dev", cls: "t-ok", t: 5.9, wait: 300 },
-];
-
+// Landing page motion: the product shot's deployments list, and the rollback timeline.
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const code = document.querySelector("#terminal code");
-
-function line(text, cls, seconds) {
-  const row = document.createElement("div");
-  if (seconds != null) {
-    const time = document.createElement("span");
-    time.className = "t-time";
-    time.textContent = `${seconds.toFixed(1).padStart(4, " ")}s  `;
-    row.append(time);
-  }
-  const body = document.createElement("span");
-  if (cls) body.className = cls;
-  if (cls === "t-ok") {
-    // Highlight the URL in the final line.
-    const [label, url] = text.split(/\s{2}/);
-    body.textContent = `${label}  `;
-    const link = document.createElement("span");
-    link.className = "t-url";
-    link.textContent = url;
-    row.append(body, link);
-  } else {
-    body.textContent = text;
-    row.append(body);
-  }
-  code.append(row);
-  return body;
-}
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function play() {
-  for (;;) {
-    code.textContent = "";
-    for (const l of LINES) {
-      await sleep(l.wait);
-      if (l.typed) {
-        const target = line("", l.cls, null);
-        const cursor = document.createElement("span");
-        cursor.className = "cursor";
-        target.after(cursor);
-        for (const ch of l.text) {
-          target.textContent += ch;
-          await sleep(45);
-        }
-        await sleep(350);
-        cursor.remove();
-      } else {
-        line(l.text, l.cls, l.t);
-      }
+// Product shot: a push arrives, builds, and goes live in production. Illustrative, on a loop.
+const COMMITS = [
+  { msg: "Add gift cards", branch: "main", sha: "3e9b0c4" },
+  { msg: "Fix cart badge on mobile", branch: "main", sha: "a71d5f2" },
+  { msg: "Launch winter sale banner", branch: "main", sha: "c02e8b9" },
+  { msg: "Faster search results", branch: "main", sha: "5bd41e7" },
+];
+
+function row({ msg, branch }) {
+  const li = document.createElement("li");
+  li.className = "enter";
+  li.innerHTML = `<span class="dot building"></span><span class="d-msg"></span><span class="d-branch"></span><span class="d-env d-building">Building</span><span class="d-time">0s</span>`;
+  li.querySelector(".d-msg").textContent = msg;
+  li.querySelector(".d-branch").textContent = branch;
+  return li;
+}
+
+async function playShot() {
+  const list = document.getElementById("shot-list");
+  const source = document.getElementById("shot-source");
+  const preview = document.querySelector(".shot-preview");
+  if (!list) return;
+  for (let i = 0; ; i = (i + 1) % COMMITS.length) {
+    await sleep(2600);
+    const commit = COMMITS[i];
+    const li = row(commit);
+    list.prepend(li);
+    const time = li.querySelector(".d-time");
+    for (let s = 1; s <= 4; s++) {
+      await sleep(700);
+      time.textContent = `${s}s`;
     }
-    await sleep(5000);
+    // Ready: it becomes production, and the previous production steps back.
+    list.querySelector(".d-prod")?.classList.remove("d-prod");
+    li.querySelector(".dot").className = "dot ok";
+    const env = li.querySelector(".d-env");
+    env.className = "d-env d-prod";
+    env.textContent = "Production";
+    time.textContent = "just now";
+    source.textContent = `${commit.branch} · ${commit.sha}`;
+    preview.classList.remove("fresh");
+    void preview.offsetWidth;
+    preview.classList.add("fresh");
+    while (list.children.length > 3) list.lastElementChild.remove();
   }
 }
 
-if (code) {
-  if (reduceMotion) {
-    for (const l of LINES) line(l.text, l.cls, l.typed ? null : l.t);
-  } else {
-    play();
+// Rollback: v4 ships with a problem, production points back at v3, then v4 is fixed and live.
+async function playTimeline() {
+  const nodes = [...document.querySelectorAll(".tl-node")];
+  const text = document.getElementById("tl-text");
+  const dot = document.getElementById("tl-dot");
+  if (!nodes.length) return;
+  const live = (v) => nodes.forEach((n) => n.classList.toggle("live", n.dataset.v === String(v)));
+  const status = (message, cls) => {
+    text.textContent = message;
+    dot.className = `dot ${cls}`;
+  };
+  for (;;) {
+    nodes[3].classList.remove("bad");
+    live(4);
+    status("v4 is live", "ok");
+    await sleep(2200);
+    nodes[3].classList.add("bad");
+    status("v4 has a bug", "err");
+    await sleep(1600);
+    live(3);
+    status("Rolled back to v3 instantly, no rebuild", "ok");
+    await sleep(3200);
   }
+}
+
+if (reduceMotion) {
+  document.querySelectorAll(".tl-node")[3]?.classList.add("live");
+} else {
+  playShot();
+  playTimeline();
 }
 
 // Copy buttons

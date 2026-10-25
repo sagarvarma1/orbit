@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Orbit – Push to deploy, on your own server</title>
+    <title>Orbit – Ship the moment you push</title>
     <meta
       name="description"
-      content="Orbit is an open-source, self-hostable deployment platform. Every push gets a preview URL, every merge goes live, every deploy can be rolled back instantly."
+      content="Orbit builds every commit, gives every branch a live preview, and keeps every version one click from production. Next.js, Vite, Astro, functions and custom domains."
     />
-    <meta property="og:title" content="Orbit – Push to deploy, on your own server" />
+    <meta property="og:title" content="Orbit – Ship the moment you push" />
     <meta
       property="og:description"
-      content="Open-source, self-hostable deployments: preview URLs, instant rollbacks, custom domains, serverless functions."
+      content="Preview URLs for every branch, instant rollbacks, server rendering, functions and automatic HTTPS. Sign in with GitHub, or self-host it."
     />
     <meta property="og:url" content="https://orbitdeploy.dev" />
     <meta name="theme-color" content="#000000" />
@@ -35,217 +35,360 @@
           Orbit
         </a>
         <nav class="nav-links" aria-label="Main">
-          <a href="#features">Features</a>
-          <a href="#how">How it works</a>
-          <a href="#self-host">Self-host</a>
+          <a href="#product">Product</a>
+          <a href="#frameworks">Frameworks</a>
+          <a href="#plans">Cloud &amp; self-hosted</a>
           <a href="https://github.com/sagarvarma1/orbit/blob/main/docs/self-hosting.md">Docs</a>
-          <a href="https://github.com/sagarvarma1/orbit">GitHub</a>
         </nav>
         <a class="nav-login" href="https://app.orbitdeploy.dev/login">Log in</a>
-        <a class="btn btn-small btn-primary" href="https://app.orbitdeploy.dev/login">
-          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
-            />
-          </svg>
-          Sign up
-        </a>
+        <a class="btn btn-small btn-primary" href="https://app.orbitdeploy.dev/login">Sign up</a>
       </div>
     </header>
 
     <main>
       <!-- Hero -->
       <section class="hero">
-        <div class="hero-orbits" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="hero-glow" aria-hidden="true"></div>
         <div class="container hero-inner">
-          <a class="pill" href="https://americantimeuse.com">
-            <span class="dot"></span> Now serving americantimeuse.com, migrated from Vercel with zero code changes
-            <span aria-hidden="true">→</span>
-          </a>
-          <h1>Push to deploy.<br /><span class="dim">On your own server.</span></h1>
+          <h1>Ship the moment<br />you push.</h1>
           <p class="lead">
-            Orbit is an open-source, self-hostable deployment platform. Connect a GitHub repo and every push gets a preview URL,
-            every merge goes live, and every deploy can be rolled back instantly.
+            Orbit builds every commit, gives every branch a live preview, and keeps every version one click from production.
+            Connect GitHub and your app is online in a minute.
           </p>
           <div class="cta">
-            <a class="btn btn-primary" href="https://app.orbitdeploy.dev/login">Start deploying</a>
-            <a class="btn btn-secondary" href="#self-host">Self-host it</a>
+            <a class="btn btn-primary btn-large" href="https://app.orbitdeploy.dev/login">
+              <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+                />
+              </svg>
+              Start deploying
+            </a>
+            <a class="btn btn-secondary btn-large" href="https://github.com/sagarvarma1/orbit/blob/main/docs/self-hosting.md">
+              Read the docs
+            </a>
           </div>
-          <p class="fineprint">Sign in with GitHub · free while in beta · or run it yourself: MIT licensed, one command</p>
+          <p class="fineprint">Free during beta. No credit card.</p>
         </div>
 
+        <!-- Product shot: an illustrative, animated deployments view -->
         <div class="container">
-          <div class="terminal" role="img" aria-label="A git push triggers an Orbit build that becomes Ready at a preview URL">
-            <div class="terminal-bar">
+          <div class="shot" role="img" aria-label="The Orbit dashboard: a new deployment builds, then goes live in production">
+            <div class="shot-bar">
               <span></span><span></span><span></span>
-              <p>orbit-demo · production</p>
+              <p>app.orbitdeploy.dev/storefront</p>
             </div>
-            <pre class="terminal-body" id="terminal"><code></code></pre>
+            <div class="shot-body">
+              <div class="shot-project">
+                <div class="shot-avatar">S</div>
+                <div>
+                  <div class="shot-title">storefront</div>
+                  <div class="shot-url">storefront.orbitdeploy.dev</div>
+                </div>
+                <span class="shot-btn">Visit</span>
+              </div>
+              <div class="shot-prod">
+                <div class="shot-preview" aria-hidden="true">
+                  <div class="pv-nav"><i></i><i></i><i></i><u></u></div>
+                  <div class="pv-hero"><b></b><b></b><em></em></div>
+                  <div class="pv-grid">
+                    <div class="pv-card"><s style="--a: #ff8a65; --b: #b4479a"></s><i></i><i></i></div>
+                    <div class="pv-card"><s style="--a: #7c8cff; --b: #36c6c0"></s><i></i><i></i></div>
+                    <div class="pv-card"><s style="--a: #ffd166; --b: #ef6f6c"></s><i></i><i></i></div>
+                  </div>
+                </div>
+                <dl class="shot-meta">
+                  <div>
+                    <dt>Status</dt>
+                    <dd><span class="dot ok"></span> Ready</dd>
+                  </div>
+                  <div>
+                    <dt>Framework</dt>
+                    <dd>Next.js · server-rendered</dd>
+                  </div>
+                  <div>
+                    <dt>Source</dt>
+                    <dd class="mono" id="shot-source">main · 8c1f2ad</dd>
+                  </div>
+                  <div>
+                    <dt>Domains</dt>
+                    <dd>storefront.com</dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="shot-list-head">Deployments</div>
+              <ul class="shot-list" id="shot-list">
+                <li>
+                  <span class="dot ok"></span>
+                  <span class="d-msg">Add holiday collection</span>
+                  <span class="d-branch">main</span>
+                  <span class="d-env d-prod">Production</span>
+                  <span class="d-time">2m ago</span>
+                </li>
+                <li>
+                  <span class="dot ok"></span>
+                  <span class="d-msg">Try a new checkout layout</span>
+                  <span class="d-branch">checkout-v2</span>
+                  <span class="d-env">Preview</span>
+                  <span class="d-time">1h ago</span>
+                </li>
+                <li>
+                  <span class="dot ok"></span>
+                  <span class="d-msg">Speed up product images</span>
+                  <span class="d-branch">main</span>
+                  <span class="d-env">Production</span>
+                  <span class="d-time">3h ago</span>
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- Proof -->
-      <section class="section proof">
+      <!-- Frameworks -->
+      <section class="frameworks" id="frameworks">
         <div class="container">
-          <p class="eyebrow">Running on Orbit today</p>
-          <div class="proof-grid">
-            <a class="proof-card" href="https://americantimeuse.com">
-              <span class="proof-host">americantimeuse.com</span>
-              <span class="proof-text"
-                >A data-heavy site with two serverless functions, moved off Vercel with no code changes.</span
-              >
-              <span class="proof-tags"><span>Static</span><span>Functions</span><span>Custom domain</span></span>
-            </a>
-            <a class="proof-card" href="https://orbit-demo.orbitdeploy.dev">
-              <span class="proof-host">orbit-demo.orbitdeploy.dev</span>
-              <span class="proof-text">A Vite + React app, rebuilt and redeployed on every push to GitHub.</span>
-              <span class="proof-tags"><span>Vite</span><span>Preview URLs</span><span>Build cache</span></span>
-            </a>
-            <a class="proof-card" href="https://github.com/sagarvarma1/orbit/tree/main/site">
-              <span class="proof-host">orbitdeploy.dev</span>
-              <span class="proof-text">This page. It lives in Orbit's own repo, and Orbit deploys it.</span>
-              <span class="proof-tags"><span>Monorepo</span><span>Static HTML</span><span>Apex domain</span></span>
-            </a>
-          </div>
+          <p>Detects your framework and builds it the right way</p>
+          <ul>
+            <li>Next.js</li>
+            <li>Vite</li>
+            <li>React</li>
+            <li>Astro</li>
+            <li>Node.js</li>
+            <li>Static HTML</li>
+            <li>Monorepos</li>
+          </ul>
         </div>
       </section>
 
-      <!-- Features -->
-      <section class="section" id="features">
+      <!-- Product sections -->
+      <section class="section" id="product">
         <div class="container">
-          <p class="eyebrow">Features</p>
-          <h2>The workflow you know, without the lock-in.</h2>
-          <p class="section-lead">Everything between <code>git push</code> and a live URL, on hardware you control.</p>
-          <div class="feature-grid">
-            <article class="feature">
-              <h3>Git push to deploy</h3>
-              <p>A GitHub App delivers pushes instantly. Builds stream live logs to the dashboard as they run.</p>
-            </article>
-            <article class="feature">
-              <h3>Preview URLs</h3>
-              <p>Every deployment and every branch gets its own URL, and pull requests get a comment linking to it.</p>
-            </article>
-            <article class="feature">
-              <h3>Instant rollback</h3>
-              <p>Deployments are immutable. Rolling back moves a pointer, so it takes milliseconds, not a rebuild.</p>
-            </article>
-            <article class="feature">
-              <h3>Custom domains + HTTPS</h3>
-              <p>Point DNS at your server and certificates are issued automatically on the first request.</p>
-            </article>
-            <article class="feature">
-              <h3>Serverless functions</h3>
-              <p>Files in <code>/api</code> become endpoints, with warm instances and an edge cache for <code>s-maxage</code>.</p>
-            </article>
-            <article class="feature">
-              <h3>vercel.json compatible</h3>
-              <p>Redirects, rewrites, headers, build settings and function config work as written.</p>
-            </article>
-            <article class="feature">
-              <h3>Next.js, server-rendered</h3>
-              <p>SSR, route handlers and server actions with no config changes. Vite, Astro and plain HTML work too.</p>
-            </article>
-            <article class="feature">
-              <h3>Isolated builds</h3>
-              <p>Each build runs in a throwaway Docker container with CPU and memory limits, and a dependency cache.</p>
-            </article>
-            <article class="feature">
-              <h3>Commit checks</h3>
-              <p>Builds report back to GitHub as commit statuses, so a failed deploy shows up on the pull request.</p>
-            </article>
+          <div class="section-head">
+            <p class="eyebrow">Develop. Preview. Ship.</p>
+            <h2>The whole path from commit to customer.</h2>
+          </div>
+
+          <!-- Previews -->
+          <div class="block">
+            <div class="block-text">
+              <h3>A live URL for every pull request.</h3>
+              <p>
+                Push a branch and Orbit builds it on its own URL. Pull requests get a comment with the preview link, kept up to
+                date as you push, and a check on every commit.
+              </p>
+              <ul class="ticks">
+                <li>Every deployment keeps a permanent URL</li>
+                <li>Branch URLs always serve the latest commit</li>
+                <li>Build status shows up right in GitHub</li>
+              </ul>
+            </div>
+            <div class="block-visual">
+              <div class="pr">
+                <div class="pr-head">
+                  <span class="pr-avatar">
+                    <svg width="14" height="14" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+                      <circle cx="16" cy="16" r="6" fill="currentColor" />
+                      <ellipse
+                        cx="16"
+                        cy="16"
+                        rx="14"
+                        ry="6.5"
+                        stroke="currentColor"
+                        stroke-width="2.4"
+                        transform="rotate(-30 16 16)"
+                      />
+                    </svg>
+                  </span>
+                  <b>orbit</b> <span class="pr-bot">bot</span> <span class="pr-when">commented just now</span>
+                </div>
+                <div class="pr-body">
+                  <p><b>Orbit</b> deployed this pull request.</p>
+                  <div class="pr-table">
+                    <div class="pr-row pr-th"><span>Project</span><span>Status</span><span>Preview</span></div>
+                    <div class="pr-row">
+                      <span><b>storefront</b></span>
+                      <span><span class="dot ok"></span> Ready</span>
+                      <span class="link">Visit Preview</span>
+                    </div>
+                  </div>
+                  <p class="pr-foot mono">storefront-git-checkout-v2.orbitdeploy.dev</p>
+                </div>
+                <div class="pr-checks"><span class="dot ok"></span> All checks have passed</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Rollback -->
+          <div class="block block-flip">
+            <div class="block-text">
+              <h3>Roll back before anyone notices.</h3>
+              <p>
+                Every build is immutable and kept. Production is a pointer to one of them, so promoting a preview or undoing a bad
+                release is instant: nothing rebuilds.
+              </p>
+              <ul class="ticks">
+                <li>Promote any preview to production</li>
+                <li>Roll back to any earlier deployment</li>
+                <li>Auto-promotion pauses after a rollback</li>
+              </ul>
+            </div>
+            <div class="block-visual">
+              <div class="timeline" id="timeline" aria-hidden="true">
+                <div class="tl-row">
+                  <div class="tl-node" data-v="1"><span>v1</span></div>
+                  <div class="tl-node" data-v="2"><span>v2</span></div>
+                  <div class="tl-node" data-v="3"><span>v3</span></div>
+                  <div class="tl-node" data-v="4"><span>v4</span></div>
+                </div>
+                <div class="tl-status"><span class="dot" id="tl-dot"></span> <span id="tl-text">v4 is live</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Rendering -->
+          <div class="block">
+            <div class="block-text">
+              <h3>Server rendering and functions, no config.</h3>
+              <p>
+                Next.js apps run as real servers: SSR, streaming, route handlers and server actions work as written. Put a file in
+                <code>/api</code> and it's an endpoint. Warm instances answer fast, and responses with <code>s-maxage</code> are
+                cached at the edge.
+              </p>
+              <ul class="ticks">
+                <li>Streaming React Server Components</li>
+                <li>Node and Web-standard function handlers</li>
+                <li>Static assets served straight from the edge</li>
+              </ul>
+            </div>
+            <div class="block-visual">
+              <div class="code-card">
+                <div class="code-head">app/page.js</div>
+                <pre><code><span class="t-c">// Rendered on every request</span>
+<span class="t-k">export const</span> dynamic = <span class="t-s">"force-dynamic"</span>;
+
+<span class="t-k">export default async function</span> <span class="t-f">Page</span>() {
+  <span class="t-k">const</span> orders = <span class="t-k">await</span> <span class="t-f">getOrders</span>();
+  <span class="t-k">return</span> (
+    <span class="t-p">&lt;</span><span class="t-f">Suspense</span> fallback=<span class="t-p">{&lt;</span><span class="t-f">Skeleton</span> <span class="t-p">/&gt;}&gt;</span>
+      <span class="t-p">&lt;</span><span class="t-f">Dashboard</span> orders=<span class="t-p">{</span>orders<span class="t-p">}</span> <span class="t-p">/&gt;</span>
+    <span class="t-p">&lt;/</span><span class="t-f">Suspense</span><span class="t-p">&gt;</span>
+  );
+}</code></pre>
+                <div class="stream" aria-hidden="true">
+                  <span class="stream-label">Streaming</span>
+                  <span class="chunk" style="--d: 0s"></span>
+                  <span class="chunk" style="--d: 0.4s"></span>
+                  <span class="chunk" style="--d: 0.9s"></span>
+                  <span class="chunk" style="--d: 1.5s"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Domains -->
+          <div class="block block-flip">
+            <div class="block-text">
+              <h3>Your domain, with HTTPS from the first request.</h3>
+              <p>
+                Add a domain and Orbit shows you the one DNS record to create. Certificates are issued and renewed automatically,
+                for apex domains and subdomains alike. Point a domain at production or at a branch.
+              </p>
+              <ul class="ticks">
+                <li>Automatic certificates, no DNS credentials</li>
+                <li>Apex and www side by side</li>
+                <li>Domains can follow a staging branch</li>
+              </ul>
+            </div>
+            <div class="block-visual">
+              <div class="domains">
+                <div class="dm-row">
+                  <div>
+                    <div class="dm-host">storefront.com</div>
+                    <div class="dm-sub">Production</div>
+                  </div>
+                  <span class="dm-ok"><span class="dot ok"></span> Valid configuration</span>
+                </div>
+                <div class="dm-row">
+                  <div>
+                    <div class="dm-host">www.storefront.com</div>
+                    <div class="dm-sub">Production</div>
+                  </div>
+                  <span class="dm-ok"><span class="dot ok"></span> Valid configuration</span>
+                </div>
+                <div class="dm-row">
+                  <div>
+                    <div class="dm-host">staging.storefront.com</div>
+                    <div class="dm-sub">Branch: staging</div>
+                  </div>
+                  <span class="dm-ok"><span class="dot ok"></span> Valid configuration</span>
+                </div>
+                <div class="dm-record"><span>CNAME</span><span>www</span><span class="mono">app.orbitdeploy.dev</span></div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- How it works -->
-      <section class="section" id="how">
+      <!-- Feature grid -->
+      <section class="section section-tight">
         <div class="container">
-          <p class="eyebrow">How it works</p>
-          <h2>Builds are immutable. Domains are pointers.</h2>
-          <p class="section-lead">
-            A build produces an artifact that never changes. Production, branches and custom domains are just names that point at
-            one, which is why previews are free and rollbacks are instant.
-          </p>
-          <div
-            class="diagram"
-            role="img"
-            aria-label="GitHub sends a push to the Orbit control plane, which builds an immutable artifact. The edge serves artifacts to visitors by hostname, behind Caddy for HTTPS."
-          >
-            <svg viewBox="0 0 960 300" fill="none">
-              <defs>
-                <marker
-                  id="arrow"
-                  viewBox="0 0 10 10"
-                  refX="9"
-                  refY="5"
-                  markerWidth="7"
-                  markerHeight="7"
-                  orient="auto-start-reverse"
-                >
-                  <path d="M0 0L10 5L0 10z" fill="#5c5c5c" />
-                </marker>
-              </defs>
-              <g class="d-box">
-                <rect x="10" y="40" width="170" height="86" rx="10" />
-                <text x="95" y="78" class="d-title">GitHub</text>
-                <text x="95" y="100" class="d-sub">push · pull request</text>
-              </g>
-              <g class="d-box d-accent">
-                <rect x="260" y="40" width="200" height="86" rx="10" />
-                <text x="360" y="78" class="d-title">Control plane</text>
-                <text x="360" y="100" class="d-sub">API · build queue · SQLite</text>
-              </g>
-              <g class="d-box">
-                <rect x="540" y="40" width="190" height="86" rx="10" />
-                <text x="635" y="78" class="d-title">Artifacts</text>
-                <text x="635" y="100" class="d-sub">immutable, one per build</text>
-              </g>
-              <g class="d-box d-accent">
-                <rect x="540" y="190" width="190" height="86" rx="10" />
-                <text x="635" y="228" class="d-title">Edge</text>
-                <text x="635" y="250" class="d-sub">host → deployment</text>
-              </g>
-              <g class="d-box">
-                <rect x="260" y="190" width="200" height="86" rx="10" />
-                <text x="360" y="228" class="d-title">Caddy</text>
-                <text x="360" y="250" class="d-sub">automatic HTTPS</text>
-              </g>
-              <g class="d-box">
-                <rect x="10" y="190" width="170" height="86" rx="10" />
-                <text x="95" y="228" class="d-title">Visitors</text>
-                <text x="95" y="250" class="d-sub">your-app.your.dev</text>
-              </g>
-              <g class="d-line">
-                <path d="M180 83H252" marker-end="url(#arrow)" />
-                <path d="M460 83H532" marker-end="url(#arrow)" />
-                <path d="M635 126V182" marker-end="url(#arrow)" />
-                <path d="M540 233H468" marker-end="url(#arrow)" />
-                <path d="M260 233H188" marker-end="url(#arrow)" />
-              </g>
-              <text x="216" y="72" class="d-label">webhook</text>
-              <text x="496" y="72" class="d-label">build</text>
-              <text x="648" y="160" class="d-label d-left">read-only</text>
-            </svg>
+          <div class="section-head">
+            <p class="eyebrow">Built in</p>
+            <h2>Everything a deploy needs. Nothing to bolt on.</h2>
+          </div>
+          <div class="grid">
+            <article>
+              <h4>Live build logs</h4>
+              <p>Watch every step stream in as it runs, and come back to them any time.</p>
+            </article>
+            <article>
+              <h4>Build cache</h4>
+              <p>Dependencies are reused when your lockfile hasn't changed, so repeat builds skip the install.</p>
+            </article>
+            <article>
+              <h4>Isolated builds</h4>
+              <p>Each build runs in its own throwaway container with CPU and memory limits.</p>
+            </article>
+            <article>
+              <h4>Sandboxed runtime</h4>
+              <p>Every project's code runs as its own user, walled off from other projects and the private network.</p>
+            </article>
+            <article>
+              <h4>Environment variables</h4>
+              <p>Separate values for production and previews, available at build time and at runtime.</p>
+            </article>
+            <article>
+              <h4>Monorepos</h4>
+              <p>Deploy any folder of a workspace. Dependencies install from the root, and Turborepo builds run in order.</p>
+            </article>
+            <article>
+              <h4>Redirects, rewrites, headers</h4>
+              <p>Routing rules are checked at build time and applied at the edge.</p>
+            </article>
+            <article>
+              <h4>API and tokens</h4>
+              <p>Everything in the dashboard is an API call. Create tokens for CI and scripts.</p>
+            </article>
           </div>
         </div>
       </section>
 
-      <!-- Compatibility -->
+      <!-- Migrate -->
       <section class="section">
         <div class="container split">
           <div>
-            <p class="eyebrow">Bring your project</p>
-            <h2>Already on Vercel? Your config comes with you.</h2>
+            <p class="eyebrow">Switching is easy</p>
+            <h2>Coming from Vercel? Bring your config.</h2>
             <p class="section-lead">
-              Orbit reads <code>vercel.json</code>: output directory, build commands, redirects, rewrites, headers, and
-              per-function memory, duration and included files. americantimeuse.com moved over without a single change.
+              Orbit reads <code>vercel.json</code> as written: build settings, redirects, rewrites, headers, and per-function
+              memory, duration and included files. Import the repo, update your DNS, and you're done.
             </p>
-            <ul class="checks">
-              <li>Node-style <code>(req, res)</code> and Web <code>Request → Response</code> handlers</li>
+            <ul class="ticks">
+              <li>Node <code>(req, res)</code> and Web <code>Request → Response</code> handlers</li>
               <li><code>__dirname</code> and <code>includeFiles</code> for functions that read data</li>
-              <li><code>Cache-Control: s-maxage</code> responses cached at the edge</li>
+              <li><code>Cache-Control: s-maxage</code> honored at the edge</li>
             </ul>
           </div>
           <div class="code-card">
@@ -260,92 +403,102 @@
     <span class="t-p">}</span>
   <span class="t-p">}</span>,
   <span class="t-k">"rewrites"</span>: <span class="t-p">[</span>
-    <span class="t-p">{</span> <span class="t-k">"source"</span>: <span class="t-s">"/hello/:name"</span>, <span class="t-k">"destination"</span>: <span class="t-s">"/api/hello"</span> <span class="t-p">}</span>
+    <span class="t-p">{</span> <span class="t-k">"source"</span>: <span class="t-s">"/blog/:slug"</span>, <span class="t-k">"destination"</span>: <span class="t-s">"/api/post"</span> <span class="t-p">}</span>
   <span class="t-p">]</span>
 <span class="t-p">}</span></code></pre>
           </div>
         </div>
       </section>
 
-      <!-- Self-host -->
-      <section class="section" id="self-host">
+      <!-- Cloud or self-hosted -->
+      <section class="section" id="plans">
         <div class="container">
-          <p class="eyebrow">Self-host</p>
-          <h2>Live in about ten minutes.</h2>
-          <p class="section-lead">Any Ubuntu server with 2 GB of RAM works. Orbit runs as a handful of Docker containers.</p>
-          <ol class="steps">
-            <li>
-              <span class="step-n">1</span>
-              <div>
-                <h3>Point a domain at your server</h3>
-                <p>One wildcard record. Every project and preview becomes a subdomain of it.</p>
-                <div class="cmd"><code>A&nbsp;&nbsp;*.your-domain.dev&nbsp;&nbsp;→&nbsp;&nbsp;your server's IP</code></div>
+          <div class="section-head center">
+            <p class="eyebrow">Your choice</p>
+            <h2>Use our cloud, or run it on yours.</h2>
+            <p class="section-lead">The same product either way. Orbit is open source, so you're never locked in.</p>
+          </div>
+          <div class="plans">
+            <div class="plan plan-main">
+              <div class="plan-top">
+                <h3>Orbit Cloud</h3>
+                <span class="plan-badge">Free during beta</span>
               </div>
-            </li>
-            <li>
-              <span class="step-n">2</span>
-              <div>
-                <h3>Run the installer</h3>
-                <p>It installs Docker if needed, asks for your domain and starts everything.</p>
-                <div class="cmd">
-                  <code id="install-cmd"
-                    >curl -fsSL https://raw.githubusercontent.com/sagarvarma1/orbit/main/install.sh | sudo bash</code
-                  >
-                  <button class="copy" type="button" data-copy="install-cmd" aria-label="Copy install command">Copy</button>
-                </div>
-              </div>
-            </li>
-            <li>
-              <span class="step-n">3</span>
-              <div>
-                <h3>Connect GitHub and deploy</h3>
-                <p>Open the dashboard, create the GitHub App in one click, pick a repository and press Deploy.</p>
-              </div>
-            </li>
-          </ol>
-        </div>
-      </section>
-
-      <!-- Scope -->
-      <section class="section">
-        <div class="container">
-          <div class="scope">
-            <div>
-              <p class="eyebrow">Honest scope</p>
-              <h2>What Orbit doesn't do yet.</h2>
+              <p>Sign in with GitHub and deploy. We run the servers, certificates and updates.</p>
+              <ul class="ticks">
+                <li>Preview deployments for every branch</li>
+                <li>Custom domains with HTTPS</li>
+                <li>Up to 10 projects per account</li>
+              </ul>
+              <a class="btn btn-primary" href="https://app.orbitdeploy.dev/login">Start deploying</a>
             </div>
-            <ul>
-              <li>
-                <strong>All of Next.js.</strong> Server rendering works; ISR, edge middleware and image optimization are next.
-              </li>
-              <li><strong>Multiple regions.</strong> One server serves everything, so visitors far away wait longer.</li>
-              <li>
-                <strong>Teams.</strong> Everyone gets their own account and projects; shared team projects aren't there yet.
-              </li>
-            </ul>
+            <div class="plan">
+              <div class="plan-top">
+                <h3>Self-hosted</h3>
+                <span class="plan-badge plan-badge-dim">MIT license</span>
+              </div>
+              <p>Run Orbit on any Linux server with 2 GB of RAM. One command installs everything.</p>
+              <div class="cmd">
+                <code id="install-cmd"
+                  >curl -fsSL https://raw.githubusercontent.com/sagarvarma1/orbit/main/install.sh | sudo bash</code
+                >
+                <button class="copy" type="button" data-copy="install-cmd" aria-label="Copy install command">Copy</button>
+              </div>
+              <a class="btn btn-secondary" href="https://github.com/sagarvarma1/orbit/blob/main/docs/self-hosting.md"
+                >Self-hosting guide</a
+              >
+            </div>
           </div>
         </div>
       </section>
 
       <!-- Final CTA -->
-      <section class="section final">
+      <section class="final">
+        <div class="final-glow" aria-hidden="true"></div>
         <div class="container">
-          <h2>Own your deploys.</h2>
+          <h2>Your next release is<br />one push away.</h2>
           <div class="cta">
-            <a class="btn btn-primary" href="https://app.orbitdeploy.dev/login">Start deploying</a>
-            <a class="btn btn-secondary" href="https://github.com/sagarvarma1/orbit">Read the code</a>
+            <a class="btn btn-primary btn-large" href="https://app.orbitdeploy.dev/login">Start deploying</a>
+            <a class="btn btn-secondary btn-large" href="https://github.com/sagarvarma1/orbit">View on GitHub</a>
           </div>
         </div>
       </section>
     </main>
 
     <footer class="footer">
-      <div class="container footer-inner">
-        <span>Orbit · MIT licensed · built by <a href="https://sagar-varma.com">Sagar Varma</a></span>
-        <span
-          ><a href="https://github.com/sagarvarma1/orbit">GitHub</a> ·
-          <a href="https://github.com/sagarvarma1/orbit/blob/main/docs/self-hosting.md">Docs</a></span
-        >
+      <div class="container footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="/" aria-label="Orbit home">
+            <svg width="20" height="20" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+              <circle cx="16" cy="16" r="6" fill="currentColor" />
+              <ellipse cx="16" cy="16" rx="14" ry="6.5" stroke="currentColor" stroke-width="2" transform="rotate(-30 16 16)" />
+            </svg>
+            Orbit
+          </a>
+          <p>Deploy from Git. Preview every push. Roll back instantly.</p>
+        </div>
+        <div>
+          <h5>Product</h5>
+          <a href="#product">Features</a>
+          <a href="#frameworks">Frameworks</a>
+          <a href="#plans">Cloud &amp; self-hosted</a>
+          <a href="https://app.orbitdeploy.dev/login">Dashboard</a>
+        </div>
+        <div>
+          <h5>Resources</h5>
+          <a href="https://github.com/sagarvarma1/orbit/blob/main/docs/self-hosting.md">Docs</a>
+          <a href="https://github.com/sagarvarma1/orbit#api">API</a>
+          <a href="https://github.com/sagarvarma1/orbit/commits/main">Changelog</a>
+        </div>
+        <div>
+          <h5>Open source</h5>
+          <a href="https://github.com/sagarvarma1/orbit">GitHub</a>
+          <a href="https://github.com/sagarvarma1/orbit/blob/main/LICENSE">License</a>
+          <a href="https://github.com/sagarvarma1/orbit/blob/main/SECURITY.md">Security</a>
+        </div>
+      </div>
+      <div class="container footer-base">
+        <span>© 2026 Orbit</span>
       </div>
     </footer>
 
