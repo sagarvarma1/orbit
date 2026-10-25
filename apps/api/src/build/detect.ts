@@ -172,7 +172,8 @@ export function resolveBuildSettings(
   if (installFiles.has("bun.lockb") || installFiles.has("bun.lock"))
     warnings.push("bun lockfile found; Orbit builds with npm instead.");
 
-  let installCommand: string | null = pm ? installCommandFor(pm, installFiles) : null;
+  // A folder without package.json (plain HTML) has nothing to install, even inside a monorepo.
+  let installCommand: string | null = pm && snapshot.packageJson ? installCommandFor(pm, installFiles) : null;
   let buildCommand: string | null = pm && snapshot.packageJson?.scripts?.build ? `${pm} run build` : null;
   let buildFrom: BuildSettings["buildFrom"] = "project";
   // Turborepo builds the project's internal dependencies first; plain `run build` wouldn't.

@@ -190,6 +190,16 @@ describe("monorepos", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("skips the install for a plain HTML folder inside a monorepo", () => {
+    const workspace = { directory: ".", files: ["package.json", "pnpm-lock.yaml"], packageJson: { name: "root" } };
+    expect(resolveBuildSettings(snap(null, ["index.html"]), {}, workspace)).toMatchObject({
+      framework: "static",
+      installCommand: null,
+      buildCommand: null,
+      outputDirectory: ".",
+    });
+  });
+
   it("installs at the root with its package manager and builds the project there", () => {
     const workspace = {
       directory: ".",

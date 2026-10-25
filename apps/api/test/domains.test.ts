@@ -12,12 +12,13 @@ describe("normalizeDomain", () => {
     expect(normalizeDomain("example.com.", cfg)).toBe("example.com");
     expect(normalizeDomain("example.com:443", cfg)).toBe("example.com");
   });
-  it("rejects invalid names, IPs, the platform's own domains and the dashboard", () => {
+  it("rejects invalid names, IPs, names under the platform domain and the dashboard", () => {
     for (const bad of ["localhost", "1.2.3.4", "-bad.com", "no_underscores.com", "a..b.com", "example", ""]) {
       expect(() => normalizeDomain(bad, cfg), bad).toThrow();
     }
     expect(() => normalizeDomain("my-app.example.app", cfg)).toThrow(/assigned automatically/);
-    expect(() => normalizeDomain("example.app", cfg)).toThrow();
+    // The bare root domain can host a project, e.g. a landing page.
+    expect(normalizeDomain("example.app", cfg)).toBe("example.app");
     expect(() => normalizeDomain("app.example.app", cfg)).toThrow();
   });
 });

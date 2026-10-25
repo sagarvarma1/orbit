@@ -25,7 +25,8 @@ export function normalizeDomain(input: string, config: Pick<Config, "rootDomain"
     .replace(/\.$/, "");
   if (isIP(host) || !HOSTNAME_RE.test(host)) throw new BadRequestError(`"${input}" is not a valid domain name`);
   const root = config.rootDomain.toLowerCase();
-  if (host === root || host.endsWith(`.${root}`)) {
+  // The root domain itself is free to use (e.g. for a landing page); names under it are deployments.
+  if (host.endsWith(`.${root}`)) {
     throw new BadRequestError(`Domains under ${root} are assigned automatically; add a domain you own instead`);
   }
   if (host === appHost(config)) throw new BadRequestError("That domain is used by the Orbit dashboard");
