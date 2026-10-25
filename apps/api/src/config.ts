@@ -83,6 +83,16 @@ export const config = {
   adminPassword: process.env.ORBIT_ADMIN_PASSWORD ?? "",
   /** Sets a new password for the admin on boot (forgotten password). Remove it afterwards. */
   resetAdminPassword: process.env.ORBIT_RESET_ADMIN_PASSWORD ?? "",
+  /**
+   * Who may sign in with GitHub: "open" lets anyone create an account (each sees only their own
+   * projects); otherwise only existing users and the admin's GitHub account can sign in.
+   */
+  signups: str("ORBIT_SIGNUPS", "closed") === "open",
+  /** GitHub login of the instance admin. Defaults to the account that owns the GitHub App. */
+  adminGithubLogin: str("ORBIT_ADMIN_GITHUB", "").toLowerCase(),
+  /** Limits for non-admin accounts. */
+  maxProjectsPerUser: int("MAX_PROJECTS_PER_USER", 10),
+  maxActiveBuildsPerUser: int("MAX_ACTIVE_BUILDS_PER_USER", 2),
   /** Trust X-Forwarded-* from a reverse proxy (Caddy) for client IPs and protocol. */
   trustProxy: process.env.TRUST_PROXY === "1",
   /** Allow file:// and local path repositories (used by the e2e tests). */
@@ -90,3 +100,8 @@ export const config = {
 } as const;
 
 export type Config = typeof config;
+
+/** Public origin of the API, for OAuth callbacks: the dashboard's origin, unless the API runs elsewhere (development). */
+export function apiPublicUrl(cfg: Pick<Config, "dashboardUrl">): string {
+  return (process.env.ORBIT_API_PUBLIC_URL || new URL(cfg.dashboardUrl).origin).replace(/\/$/, "");
+}

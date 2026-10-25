@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import type { AppContext } from "./context.js";
 import { PRESETS } from "./build/detect.js";
 import { HttpError } from "./lib/errors.js";
+import { Access } from "./services/access.js";
 import { deploymentRoutes } from "./routes/deployments.js";
 import { domainRoutes } from "./routes/domains.js";
 import { githubRoutes } from "./routes/github.js";
@@ -12,7 +13,8 @@ import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
-export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
+export async function buildApp(base: Omit<AppContext, "access"> & { access?: Access }): Promise<FastifyInstance> {
+  const ctx: AppContext = { ...base, access: base.access ?? new Access(base.repo, base.githubApp, base.config) };
   const pretty = process.env.NODE_ENV !== "production";
   const app = Fastify({
     logger: {

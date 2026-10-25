@@ -55,6 +55,10 @@ export function Header() {
               <Link href="/settings" className={pathname.startsWith("/settings") ? "text-white" : "hover:text-fg"}>
                 Settings
               </Link>
+              <span className="flex items-center gap-2">
+                {user.avatarUrl ? <img src={user.avatarUrl} alt="" className="h-6 w-6 rounded-full border border-line" /> : null}
+                <span className="hidden text-fg md:inline">{user.githubLogin ?? user.email}</span>
+              </span>
               <button type="button" onClick={() => void logout()} className="hover:text-fg" title={user.email}>
                 Log out
               </button>

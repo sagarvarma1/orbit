@@ -121,7 +121,29 @@ export type Db = DatabaseSync;
 const ADDED_COLUMNS: [string, string, string][] = [
   ["deployments", "use_cache", "INTEGER NOT NULL DEFAULT 1"],
   ["deployments", "cache_status", "TEXT"],
+  // Accounts: people sign in with GitHub, and every project belongs to one user.
+  ["users", "role", "TEXT NOT NULL DEFAULT 'member'"],
+  ["users", "github_id", "INTEGER"],
+  ["users", "github_login", "TEXT"],
+  ["users", "name", "TEXT"],
+  ["users", "avatar_url", "TEXT"],
+  ["users", "github_token", "TEXT"],
+  ["projects", "owner_id", "TEXT"],
 ];
+
+/**
+ * Runs after the columns exist. Instances from before accounts had a single admin, so the
+ * first user becomes the admin and owns every project that has no owner yet.
+ */
+const ACCOUNT_MIGRATION = `
+CREATE UNIQUE INDEX IF NOT EXISTS users_github_idx ON users(github_id) WHERE github_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS projects_owner_idx ON projects(owner_id);
+UPDATE users SET role = 'admin'
+  WHERE id = (SELECT id FROM users ORDER BY created_at LIMIT 1)
+    AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin');
+UPDATE projects SET owner_id = (SELECT id FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1)
+  WHERE owner_id IS NULL;
+`;
 
 function addMissingColumns(db: Db): void {
   for (const [table, column, definition] of ADDED_COLUMNS) {
@@ -146,6 +168,7 @@ export function openDb(dbPath: string): Db {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   addMissingColumns(db);
+  db.exec(ACCOUNT_MIGRATION);
   return db;
 }
 

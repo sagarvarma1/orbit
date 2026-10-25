@@ -31,6 +31,11 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       ORBIT_RESET_ADMIN_PASSWORD: ${ORBIT_RESET_ADMIN_PASSWORD:-}
+      # "open" lets anyone sign up with GitHub; each account only sees its own projects.
+      ORBIT_SIGNUPS: ${ORBIT_SIGNUPS:-closed}
+      ORBIT_ADMIN_GITHUB: ${ORBIT_ADMIN_GITHUB:-}
+      MAX_PROJECTS_PER_USER: ${MAX_PROJECTS_PER_USER:-10}
+      MAX_ACTIVE_BUILDS_PER_USER: ${MAX_ACTIVE_BUILDS_PER_USER:-2}
     volumes:
       - ${ORBIT_DATA_DIR:-/opt/orbit/data}:${ORBIT_DATA_DIR:-/opt/orbit/data}
       - /var/run/docker.sock:/var/run/docker.sock

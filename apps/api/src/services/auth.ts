@@ -1,6 +1,6 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import type { ApiToken, Repo, User } from "../db/repo.js";
+import type { ApiToken, GitHubProfile, GitHubUserToken, Repo, User, UserRole } from "../db/repo.js";
 import { BadRequestError, HttpError } from "../lib/errors.js";
 import { newId, randomId } from "../lib/ids.js";
 
@@ -35,12 +35,39 @@ export class UnauthorizedError extends HttpError {
   }
 }
 
+export class ForbiddenError extends HttpError {
+  constructor(message: string) {
+    super(403, message);
+  }
+}
+
 export interface PublicUser {
   id: string;
   email: string;
+  role: UserRole;
+  githubLogin: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+  /** Whether the account can sign in with a password (the original admin). */
+  hasPassword: boolean;
 }
 
-const publicUser = (u: User): PublicUser => ({ id: u.id, email: u.email });
+export const publicUser = (u: User): PublicUser => ({
+  id: u.id,
+  email: u.email,
+  role: u.role,
+  githubLogin: u.githubLogin,
+  name: u.name,
+  avatarUrl: u.avatarUrl,
+  hasPassword: Boolean(u.passwordHash),
+});
+
+export interface GitHubSignInOptions {
+  /** Anyone may create an account; otherwise only existing users and the admin. */
+  signups: boolean;
+  /** Lower-case GitHub login of the instance admin, if known. */
+  adminLogin: string | null;
+}
 
 function normalizeEmail(email: string): string {
   const value = email.trim().toLowerCase();
@@ -54,9 +81,9 @@ function checkPassword(password: string): void {
 }
 
 /**
- * Single-admin authentication. The first account is created with a one-time setup code that
- * is printed in the control plane's logs, so nobody who merely finds a fresh instance on the
- * internet can claim it.
+ * Accounts. The first (admin) account is created with a one-time setup code that is printed in
+ * the control plane's logs, so nobody who merely finds a fresh instance on the internet can claim
+ * it. Once a GitHub App is connected, people sign in with GitHub instead.
  */
 export class AuthService {
   /** null once an admin exists. */
@@ -84,7 +111,7 @@ export class AuthService {
       return null;
     }
     if (seed?.email && seed.password) {
-      await this.createUser(seed.email, seed.password);
+      await this.createUser(seed.email, seed.password, "admin");
       return null;
     }
     this.setupCode = `${randomId(4)}-${randomId(4)}`.toUpperCase();
@@ -98,7 +125,7 @@ export class AuthService {
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
       throw new BadRequestError("That setup code is not right. It's printed in the Orbit API logs.");
     }
-    const user = await this.createUser(email, password);
+    const user = await this.createUser(email, password, "admin");
     this.setupCode = null;
     return { user: publicUser(user), session: this.createSession(user.id) };
   }
@@ -120,12 +147,57 @@ export class AuthService {
     return { user: publicUser(user), session: this.createSession(user.id) };
   }
 
+  /**
+   * Signs in (or signs up) with a GitHub identity. The admin's GitHub account takes over the
+   * original password-based admin account the first time, so existing projects carry over.
+   */
+  signInWithGithub(
+    profile: GitHubProfile & { email: string | null },
+    token: GitHubUserToken,
+    opts: GitHubSignInOptions,
+  ): { user: PublicUser; session: string; created: boolean } {
+    let user = this.repo.getUserByGithubId(profile.githubId);
+    let created = false;
+    if (!user) {
+      const isAdmin = opts.adminLogin !== null && profile.githubLogin.toLowerCase() === opts.adminLogin;
+      const unlinked = isAdmin ? this.repo.unlinkedAdmin() : undefined;
+      if (unlinked) {
+        user = unlinked;
+      } else {
+        if (!isAdmin && !opts.signups) {
+          throw new ForbiddenError("Sign-ups are closed on this Orbit instance. Ask its admin for access.");
+        }
+        // GitHub only shares public emails; fall back to the no-reply address GitHub assigns everyone.
+        const noreply = `${profile.githubId}+${profile.githubLogin}@users.noreply.github.com`.toLowerCase();
+        const email = profile.email && !this.repo.getUserByEmail(profile.email.toLowerCase()) ? profile.email : noreply;
+        user = {
+          id: newId("usr"),
+          email: email.toLowerCase(),
+          passwordHash: "",
+          role: isAdmin ? "admin" : "member",
+          githubId: null,
+          githubLogin: null,
+          name: null,
+          avatarUrl: null,
+          githubToken: null,
+          createdAt: Date.now(),
+        };
+        this.repo.insertUser(user);
+        created = true;
+      }
+    }
+    this.repo.updateUserGithub(user.id, profile, token);
+    const fresh = this.repo.getUser(user.id)!;
+    return { user: publicUser(fresh), session: this.createSession(fresh.id), created };
+  }
+
   logout(session: string): void {
     this.repo.deleteSession(hashToken(session));
   }
 
   async changePassword(userId: string, current: string, next: string): Promise<string> {
     const user = this.repo.getUser(userId);
+    if (user && !user.passwordHash) throw new BadRequestError("This account signs in with GitHub and has no password");
     if (!user || !(await verifyPassword(current, user.passwordHash))) throw new BadRequestError("Current password is wrong");
     checkPassword(next);
     this.repo.updateUserPassword(user.id, await hashPassword(next));
@@ -161,12 +233,18 @@ export class AuthService {
     return { token, apiToken };
   }
 
-  private async createUser(email: string, password: string): Promise<User> {
+  private async createUser(email: string, password: string, role: UserRole): Promise<User> {
     checkPassword(password);
     const user: User = {
       id: newId("usr"),
       email: normalizeEmail(email),
       passwordHash: await hashPassword(password),
+      role,
+      githubId: null,
+      githubLogin: null,
+      name: null,
+      avatarUrl: null,
+      githubToken: null,
       createdAt: Date.now(),
     };
     this.repo.insertUser(user);

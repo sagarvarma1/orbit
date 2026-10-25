@@ -1,5 +1,7 @@
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { apiPublicUrl } from "../config.js";
 import type { AppContext } from "../context.js";
 import { HttpError, NotFoundError } from "../lib/errors.js";
 import { type PublicUser, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, UnauthorizedError } from "../services/auth.js";
@@ -17,6 +19,8 @@ const PUBLIC_ROUTES = new Set([
   "POST /api/auth/setup",
   "POST /api/auth/login",
   "POST /api/auth/logout",
+  "GET /api/auth/github",
+  "GET /api/auth/github/callback",
   // HMAC-verified instead.
   "POST /api/webhooks/github",
   // Caddy's on-demand TLS check; only answers yes/no for a hostname.
@@ -55,6 +59,21 @@ function sameOriginRequest(req: FastifyRequest, dashboardOrigin: string): boolea
   return origin.host === req.headers.host;
 }
 
+/** Holds the OAuth state (and where to go afterwards) between leaving for GitHub and coming back. */
+const OAUTH_COOKIE = "orbit_oauth";
+
+/** Only same-site paths, so ?next= can't bounce people to another website ("/\\evil.com" acts like "//evil.com"). */
+export function safeNext(next: unknown): string {
+  return typeof next === "string" && /^\/(?![/\\])/.test(next) && next.length < 500 ? next : "/";
+}
+
+/** The GitHub login of the instance admin: configured, or the account that owns the GitHub App. */
+export function adminGithubLogin(ctx: AppContext): string | null {
+  if (ctx.config.adminGithubLogin) return ctx.config.adminGithubLogin;
+  const owner = ctx.githubApp.credentials?.owner;
+  return owner ? owner.toLowerCase() : null;
+}
+
 const credentials = z.object({ email: z.string().min(1).max(200), password: z.string().min(1).max(200) });
 
 export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -80,7 +99,58 @@ export function authRoutes(app: FastifyInstance, ctx: AppContext): void {
   const startSession = (reply: FastifyReply, session: string) =>
     reply.header("set-cookie", sessionCookie(ctx, session, SESSION_MAX_AGE_SECONDS));
 
-  app.get("/api/auth/status", async (req) => ({ setupRequired: ctx.auth.setupRequired, user: req.user }));
+  app.get("/api/auth/status", async (req) => ({
+    setupRequired: ctx.auth.setupRequired,
+    user: req.user,
+    github: ctx.githubApp.configured,
+    signups: ctx.config.signups,
+  }));
+
+  // ------------------------------------------------------ sign in with GitHub
+
+  const callbackUrl = `${apiPublicUrl(ctx.config)}/api/auth/github/callback`;
+  const oauthCookie = (value: string, maxAge: number) => {
+    const secure = callbackUrl.startsWith("https://") ? "; Secure" : "";
+    return `${OAUTH_COOKIE}=${encodeURIComponent(value)}; Path=/api/auth/github; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+  };
+  const toDashboard = (reply: FastifyReply, pathAndQuery: string) => reply.redirect(`${ctx.config.dashboardUrl}${pathAndQuery}`);
+  const loginError = (reply: FastifyReply, message: string) => toDashboard(reply, `/login?error=${encodeURIComponent(message)}`);
+
+  /** Sends the browser to GitHub's "Authorize" page. */
+  app.get("/api/auth/github", async (req, reply) => {
+    const next = safeNext((req.query as { next?: unknown }).next);
+    const state = randomBytes(16).toString("hex");
+    const url = ctx.githubApp.authorizeUrl(state, callbackUrl);
+    if (!url) return loginError(reply, "GitHub sign-in isn't set up on this instance yet.");
+    reply.header("set-cookie", oauthCookie(`${state}:${next}`, 600));
+    return reply.redirect(url);
+  });
+
+  /** GitHub sends people back here with a one-time code. */
+  app.get("/api/auth/github/callback", async (req, reply) => {
+    const query = req.query as { code?: string; state?: string; error_description?: string };
+    const [expected = "", next = "/"] = (readCookie(req.headers.cookie, OAUTH_COOKIE) ?? "").split(/:(.*)/s);
+    reply.header("set-cookie", oauthCookie("", 0));
+    if (query.error_description) return loginError(reply, query.error_description);
+    const state = Buffer.from(String(query.state ?? ""));
+    if (!query.code || !expected || state.length !== expected.length || !timingSafeEqual(state, Buffer.from(expected))) {
+      return loginError(reply, "That sign-in link expired. Try again.");
+    }
+    try {
+      const token = await ctx.githubApp.exchangeCode(query.code, callbackUrl);
+      const profile = await ctx.githubApp.userProfile(token.accessToken);
+      const { user, session, created } = ctx.auth.signInWithGithub(profile, token, {
+        signups: ctx.config.signups,
+        adminLogin: adminGithubLogin(ctx),
+      });
+      req.log.info({ user: user.githubLogin, created }, "GitHub sign-in");
+      // Fastify appends set-cookie headers, so this joins the one clearing the OAuth state.
+      reply.header("set-cookie", sessionCookie(ctx, session, SESSION_MAX_AGE_SECONDS));
+      return toDashboard(reply, created ? "/new?welcome=1" : safeNext(next));
+    } catch (err) {
+      return loginError(reply, err instanceof HttpError ? err.message : "GitHub sign-in failed. Try again.");
+    }
+  });
 
   app.post("/api/auth/setup", async (req, reply) => {
     const input = credentials.extend({ code: z.string().min(1).max(50) }).parse(req.body);

@@ -8,11 +8,23 @@ import { Spinner } from "./ui";
 export interface User {
   id: string;
   email: string;
+  role: "admin" | "member";
+  githubLogin: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+  hasPassword: boolean;
 }
 
-interface AuthState {
+interface AuthStatus {
   user: User | null;
   setupRequired: boolean;
+  /** "Sign in with GitHub" is available (a GitHub App is connected). */
+  github: boolean;
+  /** Anyone may create an account. */
+  signups: boolean;
+}
+
+interface AuthState extends AuthStatus {
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -31,18 +43,20 @@ export function useAuth(): AuthState {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [state, setState] = useState<{ loaded: boolean; user: User | null; setupRequired: boolean }>({
+  const [state, setState] = useState<AuthStatus & { loaded: boolean }>({
     loaded: false,
     user: null,
     setupRequired: false,
+    github: false,
+    signups: false,
   });
 
   const refresh = useCallback(async () => {
     try {
-      const status = await api<{ user: User | null; setupRequired: boolean }>("/api/auth/status");
-      setState({ loaded: true, user: status.user, setupRequired: status.setupRequired });
+      const status = await api<AuthStatus>("/api/auth/status");
+      setState({ loaded: true, ...status });
     } catch {
-      setState({ loaded: true, user: null, setupRequired: false });
+      setState({ loaded: true, user: null, setupRequired: false, github: false, signups: false });
     }
   }, []);
 
@@ -72,7 +86,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const ready = state.loaded && (isPublic ? !state.user : Boolean(state.user));
   return (
-    <AuthContext.Provider value={{ user: state.user, setupRequired: state.setupRequired, refresh, logout }}>
+    <AuthContext.Provider
+      value={{
+        user: state.user,
+        setupRequired: state.setupRequired,
+        github: state.github,
+        signups: state.signups,
+        refresh,
+        logout,
+      }}
+    >
       {ready ? (
         children
       ) : (

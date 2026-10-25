@@ -25,6 +25,8 @@ const env = {
   ORBIT_DATA_DIR: path.join(ROOT, "data"),
   NODE_OPTIONS: "--disable-warning=ExperimentalWarning",
   NEXT_TELEMETRY_DISABLED: "1",
+  // The dashboard and API run on separate ports here, so GitHub sign-in returns to the API directly.
+  ORBIT_API_PUBLIC_URL: "http://localhost:4000",
   ...loadDotenv(path.join(ROOT, ".env")),
   ...process.env,
 };

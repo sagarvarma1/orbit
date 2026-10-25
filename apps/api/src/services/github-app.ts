@@ -1,6 +1,6 @@
 import { createSign, randomBytes } from "node:crypto";
 import type { Config } from "../config.js";
-import type { Repo } from "../db/repo.js";
+import type { GitHubProfile, GitHubUserToken, Repo } from "../db/repo.js";
 import { parseRepoUrl } from "../build/git.js";
 import { BadRequestError, HttpError } from "../lib/errors.js";
 import { randomId } from "../lib/ids.js";
@@ -34,6 +34,42 @@ export interface GitHubInstallation {
   repositorySelection: "all" | "selected";
   settingsUrl: string;
 }
+
+export type RepoPermission = "admin" | "push" | "read";
+
+interface RawRepository {
+  full_name: string;
+  html_url: string;
+  private: boolean;
+  default_branch: string;
+  pushed_at: string | null;
+}
+
+interface RawInstallation {
+  id: number;
+  account: { login: string; avatar_url?: string } | null;
+  repository_selection: "all" | "selected";
+  html_url: string;
+}
+
+const toInstallation = (i: RawInstallation): GitHubInstallation => ({
+  id: i.id,
+  account: i.account?.login ?? "",
+  avatarUrl: i.account?.avatar_url ?? null,
+  repositorySelection: i.repository_selection,
+  settingsUrl: i.html_url,
+});
+
+const toRepository = (r: RawRepository, installationId: number): GitHubRepository => ({
+  fullName: r.full_name,
+  url: r.html_url,
+  private: r.private,
+  defaultBranch: r.default_branch,
+  pushedAt: r.pushed_at,
+  installationId,
+});
+
+const byLastPush = (a: GitHubRepository, b: GitHubRepository) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? "");
 
 const SETTINGS_KEY = "github_app";
 const STATE_KEY = "github_app_manifest_state";
@@ -81,7 +117,10 @@ export class GitHubApp {
    * The manifest the dashboard posts to GitHub. GitHub shows a pre-filled "Create GitHub App"
    * page and redirects back with a code we exchange for the app's credentials.
    */
-  createManifest(org?: string): { action: string; manifest: Record<string, unknown>; state: string } {
+  createManifest(
+    org?: string,
+    opts: { public?: boolean; callbackUrl?: string } = {},
+  ): { action: string; manifest: Record<string, unknown>; state: string } {
     const dashboard = this.config.dashboardUrl;
     const local = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(dashboard);
     const state = randomBytes(16).toString("hex");
@@ -96,7 +135,10 @@ export class GitHubApp {
       redirect_url: `${dashboard}/settings/github/callback`,
       setup_url: `${dashboard}/settings?github=installed`,
       setup_on_update: true,
-      public: false,
+      // "Sign in with GitHub" uses the app's OAuth client.
+      ...(opts.callbackUrl ? { callback_urls: [opts.callbackUrl] } : {}),
+      // Public apps can be installed by anyone, which an instance with open sign-ups needs.
+      public: Boolean(opts.public),
       default_permissions: { contents: "read", metadata: "read", statuses: "write", pull_requests: "write" },
       default_events: ["push", "pull_request"],
     };
@@ -150,21 +192,8 @@ export class GitHubApp {
   // ------------------------------------------------------------------ tokens
 
   async installations(): Promise<GitHubInstallation[]> {
-    const list = await this.request<
-      {
-        id: number;
-        account: { login: string; avatar_url?: string } | null;
-        repository_selection: "all" | "selected";
-        html_url: string;
-      }[]
-    >("GET", "/app/installations?per_page=100", undefined, { jwt: true });
-    return list.map((i) => ({
-      id: i.id,
-      account: i.account?.login ?? "",
-      avatarUrl: i.account?.avatar_url ?? null,
-      repositorySelection: i.repository_selection,
-      settingsUrl: i.html_url,
-    }));
+    const list = await this.request<RawInstallation[]>("GET", "/app/installations?per_page=100", undefined, { jwt: true });
+    return list.map(toInstallation);
   }
 
   async installationToken(installationId: number): Promise<string> {
@@ -219,31 +248,117 @@ export class GitHubApp {
     for (const installation of await this.installations()) {
       const token = await this.installationToken(installation.id);
       for (let page = 1; page <= 5; page++) {
-        const res = await this.request<{
-          total_count: number;
-          repositories: {
-            full_name: string;
-            html_url: string;
-            private: boolean;
-            default_branch: string;
-            pushed_at: string | null;
-          }[];
-        }>("GET", `/installation/repositories?per_page=100&page=${page}`, undefined, { token });
+        const res = await this.request<{ repositories: RawRepository[] }>(
+          "GET",
+          `/installation/repositories?per_page=100&page=${page}`,
+          undefined,
+          { token },
+        );
         for (const r of res.repositories) {
-          out.push({
-            fullName: r.full_name,
-            url: r.html_url,
-            private: r.private,
-            defaultBranch: r.default_branch,
-            pushedAt: r.pushed_at,
-            installationId: installation.id,
-          });
+          out.push(toRepository(r, installation.id));
           this.repoInstallations.set(r.full_name.toLowerCase(), { id: installation.id, checkedAt: Date.now() });
         }
         if (res.repositories.length < 100) break;
       }
     }
-    return out.sort((a, b) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""));
+    return out.sort(byLastPush);
+  }
+
+  // ------------------------------------------------------------ user sign-in
+
+  /** GitHub's "Authorize" page for signing in. GitHub Apps need no scopes. */
+  authorizeUrl(state: string, redirectUri: string): string | null {
+    const creds = this.credentials;
+    if (!creds) return null;
+    const params = new URLSearchParams({ client_id: creds.clientId, redirect_uri: redirectUri, state });
+    return `${this.config.githubWebUrl}/login/oauth/authorize?${params}`;
+  }
+
+  exchangeCode(code: string, redirectUri: string): Promise<GitHubUserToken> {
+    return this.oauthToken({ code, redirect_uri: redirectUri });
+  }
+
+  refreshUserToken(refreshToken: string): Promise<GitHubUserToken> {
+    return this.oauthToken({ grant_type: "refresh_token", refresh_token: refreshToken });
+  }
+
+  async userProfile(token: string): Promise<GitHubProfile & { email: string | null }> {
+    const u = await this.request<{ id: number; login: string; name: string | null; avatar_url: string; email: string | null }>(
+      "GET",
+      "/user",
+      undefined,
+      { token },
+    );
+    return { githubId: u.id, githubLogin: u.login, name: u.name, avatarUrl: u.avatar_url, email: u.email };
+  }
+
+  /** Installations of this app that the signed-in user can access. */
+  async userInstallations(token: string): Promise<GitHubInstallation[]> {
+    const res = await this.request<{ installations: RawInstallation[] }>("GET", "/user/installations?per_page=100", undefined, {
+      token,
+    });
+    return res.installations.map(toInstallation);
+  }
+
+  /** Repositories the user can access through this app's installations. */
+  async userRepositories(token: string): Promise<GitHubRepository[]> {
+    const out: GitHubRepository[] = [];
+    for (const installation of await this.userInstallations(token)) {
+      for (let page = 1; page <= 5; page++) {
+        const res = await this.request<{ repositories: RawRepository[] }>(
+          "GET",
+          `/user/installations/${installation.id}/repositories?per_page=100&page=${page}`,
+          undefined,
+          { token },
+        );
+        out.push(...res.repositories.map((r) => toRepository(r, installation.id)));
+        if (res.repositories.length < 100) break;
+      }
+    }
+    return out.sort(byLastPush);
+  }
+
+  /** What the user may do with "owner/repo" on GitHub, or null if they can't see it. */
+  async userRepoPermission(token: string, fullName: string): Promise<RepoPermission | null> {
+    try {
+      const res = await this.request<{ permissions?: { admin?: boolean; maintain?: boolean; push?: boolean } }>(
+        "GET",
+        `/repos/${fullName}`,
+        undefined,
+        { token },
+      );
+      const p = res.permissions ?? {};
+      return p.admin ? "admin" : p.push || p.maintain ? "push" : "read";
+    } catch (err) {
+      if (err instanceof HttpError && err.statusCode === 404) return null;
+      throw err;
+    }
+  }
+
+  private async oauthToken(params: Record<string, string>): Promise<GitHubUserToken> {
+    const creds = this.credentials;
+    if (!creds) throw new BadRequestError("No GitHub App is connected");
+    const res = await fetch(`${this.config.githubWebUrl.replace(/\/$/, "")}/login/oauth/access_token`, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json", "user-agent": "orbit-deploy" },
+      body: JSON.stringify({ client_id: creds.clientId, client_secret: creds.clientSecret, ...params }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      access_token?: string;
+      expires_in?: number;
+      refresh_token?: string;
+      error?: string;
+      error_description?: string;
+    };
+    if (!res.ok || !data.access_token) {
+      throw new HttpError(401, `GitHub sign-in failed: ${data.error_description ?? data.error ?? res.statusText}`);
+    }
+    return {
+      accessToken: data.access_token,
+      expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : null,
+      refreshToken: data.refresh_token ?? null,
+    };
   }
 
   private async request<T>(

@@ -65,9 +65,13 @@ build in an isolated container, and real files served by a Host-routing edge wit
 
 **Platform**
 
-- **Sign-in** with an admin account created on first run using a one-time setup code from the server logs, so nobody
-  can claim a fresh instance before you do. Sessions are `HttpOnly` cookies; writes are checked against the dashboard's
-  origin (deployments share the parent domain, so `SameSite` alone isn't enough).
+- **Sign in with GitHub**, through the instance's own GitHub App. With `ORBIT_SIGNUPS=open` anyone can create an
+  account: each account sees only its own projects, and can import only repositories it can push to (or public ones
+  nobody installed Orbit on), so nobody can deploy someone else's private repo with the app's access. Members have
+  project and concurrent-build limits; the admin (the GitHub App's owner) has none and manages the app.
+- **First-run setup** with a one-time code from the server logs, so nobody can claim a fresh instance before you do.
+  Sessions are `HttpOnly` cookies; writes are checked against the dashboard's origin (deployments share the parent
+  domain, so `SameSite` alone isn't enough).
 - **API tokens** for scripts and CI (`Authorization: Bearer orbit_…`). Only hashes are stored.
 - **Dashboard** (Next.js 16, TypeScript, Tailwind v4): projects, import with repo picker, deployments, logs, env vars,
   domains, settings.
@@ -158,34 +162,38 @@ The GitHub App flow works locally too; its webhook is simply left inactive.
 
 ## Configuration
 
-| Variable                                                   | Default                 | Description                                                                          |
-| ---------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------ |
-| `ORBIT_ROOT_DOMAIN`                                        | `localhost`             | Deployments are served at `<label>.<root>`                                           |
-| `ORBIT_DASHBOARD_URL`                                      | `http://localhost:3000` | Where the dashboard lives (CORS, cookies, GitHub App redirects, "Inspect" links)     |
-| `ORBIT_PUBLIC_PROTOCOL` / `ORBIT_PUBLIC_EDGE_PORT`         | `http` / `8080`         | How URLs are rendered (`https` / `443` behind Caddy)                                 |
-| `ORBIT_PUBLIC_IP`                                          | (resolved)              | Server IP shown in DNS instructions for apex domains                                 |
-| `ORBIT_ADMIN_EMAIL` / `ORBIT_ADMIN_PASSWORD`               | (empty)                 | Create the admin on first boot instead of using a setup code                         |
-| `ORBIT_RESET_ADMIN_PASSWORD`                               | (empty)                 | Set a new admin password on boot (remove it afterwards)                              |
-| `TRUST_PROXY`                                              | `0`                     | Trust `X-Forwarded-*` from a reverse proxy                                           |
-| `ORBIT_BUILDER`                                            | `auto`                  | `auto`, `docker` or `process`                                                        |
-| `ORBIT_BUILD_IMAGE`                                        | `node:22-bookworm-slim` | Image for Docker builds                                                              |
-| `BUILD_CONCURRENCY` / `BUILD_TIMEOUT_SECONDS`              | `2` / `600`             | Queue limits                                                                         |
-| `BUILD_MEMORY` / `BUILD_CPUS`                              | `2g` / `2`              | Docker build limits                                                                  |
-| `BUILD_CACHE`                                              | `1`                     | `0` disables the build cache                                                         |
-| `FUNCTION_TIMEOUT_MS` / `FUNCTION_MEMORY_MB`               | `10000` / `128`         | Function limits                                                                      |
-| `FUNCTION_MAX_MEMORY_MB` / `FUNCTION_MAX_DURATION_SECONDS` | `1024` / `60`           | Upper bounds for per-function `memory` / `maxDuration` in vercel.json                |
-| `FUNCTION_CACHE_MB`                                        | `64`                    | Edge cache for function responses with `s-maxage` (`0` = off)                        |
-| `FUNCTION_WARM_PER_FUNCTION` / `FUNCTION_WARM_MAX`         | `1` / `4`               | Idle function processes kept warm per function / in total (`0` = cold every request) |
-| `FUNCTION_IDLE_TIMEOUT_SECONDS`                            | `300`                   | Stop a warm function process after this long without requests                        |
-| `SERVER_MAX` / `SERVER_MEMORY_MB`                          | `3` / `512`             | Next.js servers running at once / heap per server                                    |
-| `SERVER_IDLE_TIMEOUT_SECONDS`                              | `600`                   | Stop a deployment's Next.js server after this long without requests                  |
-| `GIT_POLL_INTERVAL_SECONDS`                                | `0`                     | Poll branch heads (0 = off)                                                          |
-| `GITHUB_WEBHOOK_SECRET`                                    | (empty)                 | For a manually added repository webhook (the GitHub App has its own secret)          |
-| `GITHUB_TOKEN`                                             | (empty)                 | Personal access token fallback for commit statuses and PR comments                   |
-| `GITHUB_API_URL` / `GITHUB_WEB_URL`                        | GitHub.com              | GitHub Enterprise, or fakes in tests                                                 |
-| `ORBIT_DATA_DIR` / `ORBIT_HOST_DATA_DIR`                   | `./data`                | SQLite DB, artifacts, logs, builds; host path when running in a container            |
-| `API_PORT` / `EDGE_PORT`                                   | `4000` / `8080`         | Listen ports                                                                         |
-| `NEXT_PUBLIC_API_URL`                                      | `http://localhost:4000` | API URL baked into the dashboard; empty = same origin (production images)            |
+| Variable                                                   | Default                 | Description                                                                           |
+| ---------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------- |
+| `ORBIT_ROOT_DOMAIN`                                        | `localhost`             | Deployments are served at `<label>.<root>`                                            |
+| `ORBIT_DASHBOARD_URL`                                      | `http://localhost:3000` | Where the dashboard lives (CORS, cookies, GitHub App redirects, "Inspect" links)      |
+| `ORBIT_PUBLIC_PROTOCOL` / `ORBIT_PUBLIC_EDGE_PORT`         | `http` / `8080`         | How URLs are rendered (`https` / `443` behind Caddy)                                  |
+| `ORBIT_PUBLIC_IP`                                          | (resolved)              | Server IP shown in DNS instructions for apex domains                                  |
+| `ORBIT_ADMIN_EMAIL` / `ORBIT_ADMIN_PASSWORD`               | (empty)                 | Create the admin on first boot instead of using a setup code                          |
+| `ORBIT_RESET_ADMIN_PASSWORD`                               | (empty)                 | Set a new admin password on boot (remove it afterwards)                               |
+| `ORBIT_SIGNUPS`                                            | `closed`                | `open` lets anyone sign up with GitHub (each account sees only its own projects)      |
+| `ORBIT_ADMIN_GITHUB`                                       | (app owner)             | GitHub login of the admin; it takes over the setup account on first GitHub sign-in    |
+| `MAX_PROJECTS_PER_USER` / `MAX_ACTIVE_BUILDS_PER_USER`     | `10` / `2`              | Limits for non-admin accounts                                                         |
+| `ORBIT_API_PUBLIC_URL`                                     | dashboard origin        | Where GitHub sends sign-ins back to (only when the API isn't on the dashboard origin) |
+| `TRUST_PROXY`                                              | `0`                     | Trust `X-Forwarded-*` from a reverse proxy                                            |
+| `ORBIT_BUILDER`                                            | `auto`                  | `auto`, `docker` or `process`                                                         |
+| `ORBIT_BUILD_IMAGE`                                        | `node:22-bookworm-slim` | Image for Docker builds                                                               |
+| `BUILD_CONCURRENCY` / `BUILD_TIMEOUT_SECONDS`              | `2` / `600`             | Queue limits                                                                          |
+| `BUILD_MEMORY` / `BUILD_CPUS`                              | `2g` / `2`              | Docker build limits                                                                   |
+| `BUILD_CACHE`                                              | `1`                     | `0` disables the build cache                                                          |
+| `FUNCTION_TIMEOUT_MS` / `FUNCTION_MEMORY_MB`               | `10000` / `128`         | Function limits                                                                       |
+| `FUNCTION_MAX_MEMORY_MB` / `FUNCTION_MAX_DURATION_SECONDS` | `1024` / `60`           | Upper bounds for per-function `memory` / `maxDuration` in vercel.json                 |
+| `FUNCTION_CACHE_MB`                                        | `64`                    | Edge cache for function responses with `s-maxage` (`0` = off)                         |
+| `FUNCTION_WARM_PER_FUNCTION` / `FUNCTION_WARM_MAX`         | `1` / `4`               | Idle function processes kept warm per function / in total (`0` = cold every request)  |
+| `FUNCTION_IDLE_TIMEOUT_SECONDS`                            | `300`                   | Stop a warm function process after this long without requests                         |
+| `SERVER_MAX` / `SERVER_MEMORY_MB`                          | `3` / `512`             | Next.js servers running at once / heap per server                                     |
+| `SERVER_IDLE_TIMEOUT_SECONDS`                              | `600`                   | Stop a deployment's Next.js server after this long without requests                   |
+| `GIT_POLL_INTERVAL_SECONDS`                                | `0`                     | Poll branch heads (0 = off)                                                           |
+| `GITHUB_WEBHOOK_SECRET`                                    | (empty)                 | For a manually added repository webhook (the GitHub App has its own secret)           |
+| `GITHUB_TOKEN`                                             | (empty)                 | Personal access token fallback for commit statuses and PR comments                    |
+| `GITHUB_API_URL` / `GITHUB_WEB_URL`                        | GitHub.com              | GitHub Enterprise, or fakes in tests                                                  |
+| `ORBIT_DATA_DIR` / `ORBIT_HOST_DATA_DIR`                   | `./data`                | SQLite DB, artifacts, logs, builds; host path when running in a container             |
+| `API_PORT` / `EDGE_PORT`                                   | `4000` / `8080`         | Listen ports                                                                          |
+| `NEXT_PUBLIC_API_URL`                                      | `http://localhost:4000` | API URL baked into the dashboard; empty = same origin (production images)             |
 
 ## Testing
 
@@ -195,7 +203,7 @@ pnpm e2e         # boots a real control plane + edge and deploys real repos end 
 pnpm e2e --next  # also builds Next.js apps: a static export, and server rendering with redeploy and rollback
 ```
 
-The e2e suite (68 checks) signs in, issues an API token, and deploys `mdn/beginner-html-site-styled` and a Vite app
+The e2e suite (68 checks, 87 with `--next`) signs in, issues an API token, and deploys `mdn/beginner-html-site-styled` and a Vite app
 from GitHub plus local fixtures, including an npm-workspaces monorepo. It verifies preview and production URLs,
 cache headers, SPA fallback, live SSE logs, env injection, functions, signed webhooks, promote and rollback,
 immutability, redeploys, failing builds, cancelling a build (and that the process tree is gone), `vercel.json`
@@ -206,6 +214,7 @@ rules, the build cache, and commit statuses and PR comments against a fake GitHu
 Every route except health, sign-in and webhooks needs a session or `Authorization: Bearer <api token>`.
 
 ```
+GET    /api/auth/github?next=                 (redirects to GitHub; returns to /api/auth/github/callback)
 POST   /api/auth/setup | login | logout       GET /api/auth/status      POST /api/auth/password
 GET    /api/tokens                            POST /api/tokens  {name}  DELETE /api/tokens/:id
 GET    /api/projects                          POST /api/projects        (import + first deploy)
@@ -226,7 +235,12 @@ GET    /api/tls/allowed?domain=               (Caddy on-demand TLS check)
 
 - Builds run untrusted code. On a public server they run in Docker containers with resource limits and no access
   to Orbit's secrets; the child-process builder is for local development only.
-- Functions run with Node's permission model: read-only access to their own bundle, no child processes.
+- Functions and Next.js servers run with Node's permission model: read-only access to their own deployment, no child
+  processes, so one account's code can't read another's files, env vars or Orbit's database. Node documents this
+  model as a guard rail rather than a hardened sandbox, so an instance with open sign-ups trusts its users more than
+  Vercel's microVMs would; per-deployment containers are on the roadmap.
+- Accounts only see their own projects (others' return 404), and members can only import repositories they can push
+  to, so the GitHub App's installation access can't be borrowed to read someone else's private code.
 - The dashboard and API share one origin in production. Deployments live on sibling subdomains, so state-changing
   requests made with the session cookie must come from the dashboard's origin. For stronger isolation, serve
   deployments from a separate domain (e.g. dashboard at `orbit.example.com`, deployments at `*.example.app`).
@@ -238,7 +252,8 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 - Next.js server rendering works per deployment, but ISR revalidation, middleware at the edge and `next/image`
   optimization (needs `sharp`) aren't wired up yet. Other SSR frameworks (Remix, SvelteKit, Nuxt) aren't detected.
-- One server, one admin account. No teams or roles yet.
+- One server. Accounts are individual: no shared team projects yet, and custom domains are first come, first served
+  (no TXT ownership check).
 - `vercel.json` covers `redirects`, `rewrites` (internal paths only) and `headers`, without `has`/`missing`.
 - The build cache is skipped for monorepos and custom install commands, where skipping install isn't safe.
 - Function and app-server sandboxes use Node's permission model, not VMs. A first request after idle is a cold start.
@@ -249,7 +264,8 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 - ISR, middleware and image optimization for Next.js; more SSR frameworks
 - Runtime logs and basic analytics
-- Teams and roles
+- Teams (shared projects), domain ownership verification
+- Per-deployment containers for functions and app servers
 - `orbit` CLI (`orbit deploy` from any folder)
 
 ## Contributing

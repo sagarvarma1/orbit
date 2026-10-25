@@ -37,6 +37,7 @@ describe("domain routes", () => {
     outputDirectory: null,
     rootDirectory: ".",
     autoPromotePaused: false,
+    ownerId: null,
     createdAt: 1,
     updatedAt: 1,
   };

@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
+import { useAuth } from "@/components/auth";
 import Link from "next/link";
 import {
   Badge,
@@ -18,7 +19,15 @@ import {
 } from "@/components/ui";
 import { api } from "@/lib/api";
 import { shortSha } from "@/lib/format";
-import type { Deployment, FrameworkId, GitHubRepository, InspectResult, PlatformConfig, Project } from "@/lib/types";
+import type {
+  Deployment,
+  FrameworkId,
+  GitHubRepository,
+  GitHubStatus,
+  InspectResult,
+  PlatformConfig,
+  Project,
+} from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 
 const EXAMPLES = [
@@ -78,6 +87,7 @@ export default function NewProjectPage() {
     <>
       <PageHeader title="Import a Git repository" subtitle="Pick a repository from GitHub, or paste the URL of a public one." />
       <div className="mx-auto max-w-3xl space-y-6 py-8">
+        <Welcome />
         <RepositoryPicker
           onPick={(url) => {
             setRepoUrl(url);
@@ -369,12 +379,30 @@ function Configure({
   );
 }
 
+/** First visit after signing up with GitHub. */
+function Welcome() {
+  const { user } = useAuth();
+  const [show, setShow] = useState(false);
+  useEffect(() => setShow(new URLSearchParams(window.location.search).has("welcome")), []);
+  if (!show) return null;
+  return (
+    <div className="rounded-lg border border-line-strong bg-raised px-5 py-4">
+      <p className="font-medium text-white">Welcome to Orbit{user?.name ? `, ${user.name.split(" ")[0]}` : ""}.</p>
+      <p className="mt-1 text-sm text-muted">
+        Install Orbit on GitHub and pick a repository below. It builds in a minute and you get a live URL; every push after that
+        deploys on its own.
+      </p>
+    </div>
+  );
+}
+
 /** Repositories the Orbit GitHub App can access, including private ones. */
 function RepositoryPicker({ onPick }: { onPick: (url: string) => void }) {
   const { data: config } = useApi<PlatformConfig>("/api/config");
   const { data, error, loading } = useApi<{ repositories: GitHubRepository[] }>(
     config?.githubApp ? "/api/github/repositories" : null,
   );
+  const { data: github } = useApi<GitHubStatus>(config?.githubApp ? "/api/github" : null);
   const [query, setQuery] = useState("");
 
   if (!config) return null;
@@ -406,13 +434,24 @@ function RepositoryPicker({ onPick }: { onPick: (url: string) => void }) {
         </p>
       )}
       {data && repos.length === 0 && (
-        <p className="p-4 text-sm text-muted">
-          No repositories found. Install the GitHub App on more repositories in{" "}
-          <Link href="/settings" className="text-fg underline underline-offset-2">
-            Settings
-          </Link>
-          .
-        </p>
+        <div className="flex flex-wrap items-center gap-3 p-4 text-sm text-muted">
+          <span className="flex-1">
+            {query ? "No matching repositories." : "Install Orbit on GitHub and choose the repositories it can deploy."}
+          </span>
+          {!query && github?.app && (
+            <a
+              href={github.app.installUrl}
+              className="inline-flex h-8 items-center rounded-md bg-white px-3 text-[13px] font-medium text-black hover:bg-white/90"
+            >
+              Install on GitHub
+            </a>
+          )}
+        </div>
+      )}
+      {data && repos.length > 0 && github?.app && (
+        <a href={github.app.installUrl} className="block border-t border-line px-4 py-3 text-[13px] text-muted hover:text-fg">
+          Missing a repository? Adjust GitHub App permissions →
+        </a>
       )}
       {repos.map((r) => (
         <div key={r.fullName} className="flex items-center gap-3 border-b border-line px-4 py-3 last:border-b-0">

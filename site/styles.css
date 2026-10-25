@@ -109,6 +109,15 @@ h3 {
   color: var(--fg);
 }
 
+.nav-login {
+  margin-right: 16px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.nav-login:hover {
+  color: var(--fg);
+}
+
 /* ------------------------------------------------------------ buttons */
 
 .btn {
@@ -873,6 +882,9 @@ h3 {
   }
   .nav-inner {
     justify-content: space-between;
+  }
+  .nav-login {
+    margin: 0 -12px 0 auto;
   }
   .hero {
     padding: 64px 0 48px;

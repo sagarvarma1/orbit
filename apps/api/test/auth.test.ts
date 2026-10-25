@@ -36,7 +36,7 @@ describe("auth", () => {
     expect((await t.app.inject({ url: "/api/health" })).statusCode).toBe(200);
     expect((await t.app.inject({ url: "/api/projects" })).statusCode).toBe(401);
     const status = await t.app.inject({ url: "/api/auth/status" });
-    expect(status.json()).toEqual({ setupRequired: true, user: null });
+    expect(status.json()).toMatchObject({ setupRequired: true, user: null, github: false });
   });
 
   it("creates the admin with the setup code, then only once", async () => {

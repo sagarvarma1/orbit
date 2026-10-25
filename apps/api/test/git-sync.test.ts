@@ -32,6 +32,7 @@ function setup() {
     outputDirectory: null,
     rootDirectory: ".",
     autoPromotePaused: false,
+    ownerId: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };

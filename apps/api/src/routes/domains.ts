@@ -76,21 +76,22 @@ export function domainRoutes(app: FastifyInstance, ctx: AppContext): void {
   const withUrl = (d: Domain) => ({ ...d, url: `${ctx.config.publicProtocol}://${d.hostname}` });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/domains", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const domains = ctx.repo.listDomains(project.id);
     const statuses = await Promise.all(domains.map((d) => checkDns(d.hostname, ctx.config)));
     return { domains: domains.map((d, i) => ({ ...withUrl(d), dns: statuses[i] })) };
   });
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/domains", async (req, reply) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const input = addDomainInput.parse(req.body);
     const hostname = normalizeDomain(input.hostname, ctx.config);
     const existing = ctx.repo.getDomain(hostname);
     if (existing) {
       const owner = ctx.repo.getProject(existing.projectId);
+      const visible = owner && ctx.access.canSee(req.user!, owner);
       throw new ConflictError(
-        `${hostname} is already assigned to ${owner?.name === project.name ? "this project" : `project "${owner?.name}"`}`,
+        `${hostname} is already assigned to ${owner?.id === project.id ? "this project" : visible ? `project "${owner.name}"` : "another project"}`,
       );
     }
     const domain: Domain = { hostname, projectId: project.id, branch: input.branch ?? null, createdAt: Date.now() };
@@ -100,7 +101,7 @@ export function domainRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.delete<{ Params: { id: string; hostname: string } }>("/api/projects/:id/domains/:hostname", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const domain = ctx.repo.getDomain(req.params.hostname.toLowerCase());
     if (!domain || domain.projectId !== project.id) throw new NotFoundError("Domain not found in this project");
     ctx.repo.deleteDomain(domain.hostname);

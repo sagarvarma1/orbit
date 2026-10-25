@@ -20,6 +20,7 @@ export function inspectRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/inspect", async (req) => {
     const input = inspectInput.parse(req.body);
     const repoRef = parseRepoUrl(input.repoUrl, ctx.config.allowLocalRepos);
+    await ctx.access.assertCanImport(req.user!, repoRef.url);
     const token = await ctx.githubApp.tokenFor(repoRef.url);
     const remote = await lsRemote(repoRef.url, token).catch(() => {
       throw new BadRequestError(

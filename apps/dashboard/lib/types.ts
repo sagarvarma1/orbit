@@ -133,6 +133,10 @@ export interface GitHubStatus {
   }[];
   error: string | null;
   personalAccessToken: boolean;
+  /** Only the admin creates or removes the instance's GitHub App. */
+  canManage: boolean;
+  /** Where GitHub sends people back after "Sign in with GitHub". */
+  signInCallbackUrl: string;
 }
 
 export interface GitHubRepository {

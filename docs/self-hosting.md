@@ -59,6 +59,22 @@ It covers the dashboard (`app.example.com`) and every deployment. If the dashboa
    repositories Orbit may access. Pushes now arrive through the app's webhook, and private repositories work.
 5. **New Project** → pick a repository → Deploy.
 
+## Letting other people sign up
+
+Everyone signs in with GitHub once the GitHub App is connected (the setup password keeps working for you at
+`/login?method=password`, for recovery).
+
+1. In the GitHub App's settings on GitHub: set **Callback URL** to `https://app.example.com/api/auth/github/callback`
+   (Settings → GitHub in Orbit shows the exact URL), and under **Advanced → Make public** so other accounts can
+   install it. Apps created after this change get both automatically when sign-ups are open.
+2. In `/opt/orbit/.env`, add `ORBIT_SIGNUPS=open`, then `docker compose up -d`.
+
+The GitHub account that owns the app is the admin, and its first GitHub sign-in takes over the setup account (and
+its projects). Set `ORBIT_ADMIN_GITHUB=<login>` if the app belongs to an organization. New accounts see only their own
+projects, can import only repositories they can push to (or public ones), and are limited by
+`MAX_PROJECTS_PER_USER` and `MAX_ACTIVE_BUILDS_PER_USER`. Their code runs on your server: read the Security section of
+the README before opening sign-ups.
+
 ## Custom domains
 
 Project → Settings → Domains → add `www.my-own-domain.com`. The dashboard shows the DNS record to create:

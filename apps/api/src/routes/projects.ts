@@ -53,11 +53,17 @@ const createProjectInput = z.object({
 const updateProjectInput = z.object({ productionBranch: z.string().min(1).optional(), ...buildSettingsInput });
 
 export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
-  app.get("/api/projects", async () => ({ projects: ctx.repo.listProjects().map((p) => serializeProject(ctx, p)) }));
+  app.get("/api/projects", async (req) => ({
+    projects: ctx.repo.listProjects(req.user!.id).map((p) => serializeProject(ctx, p)),
+  }));
 
   app.post("/api/projects", async (req, reply) => {
     const input = createProjectInput.parse(req.body);
+    const user = req.user!;
+    ctx.access.assertCanCreateProject(user);
+    ctx.access.assertCanBuild(user);
     const repoRef = parseRepoUrl(input.repoUrl, ctx.config.allowLocalRepos);
+    await ctx.access.assertCanImport(user, repoRef.url);
     const remote = await lsRemote(repoRef.url, await ctx.githubApp.tokenFor(repoRef.url)).catch(() => {
       throw new BadRequestError(
         "Could not reach that repository. If it's private, install the Orbit GitHub App on it (Settings → GitHub).",
@@ -72,7 +78,11 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
         "Project names must be lowercase letters, digits and dashes (max 50), and can't start with dpl- or contain -git-",
       );
     }
-    if (ctx.repo.getProject(name)) throw new ConflictError(`A project named "${name}" already exists`);
+    if (ctx.repo.getProject(name)) {
+      throw new ConflictError(
+        `The name "${name}" is taken: it's the project's URL (${name}.${ctx.config.rootDomain}). Pick another.`,
+      );
+    }
 
     const now = Date.now();
     const project: Project = {
@@ -86,6 +96,7 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
       outputDirectory: input.outputDirectory ?? null,
       rootDirectory: input.rootDirectory ?? ".",
       autoPromotePaused: false,
+      ownerId: user.id,
       createdAt: now,
       updatedAt: now,
     };
@@ -105,20 +116,20 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const aliases = ctx.repo.listAliases(project.id).map((a) => ({ ...a, url: publicUrl(ctx.config, a.hostname) }));
     return { project: serializeProject(ctx, project), aliases, productionHistory: ctx.repo.productionHistory(project.id) };
   });
 
   app.patch<{ Params: { id: string } }>("/api/projects/:id", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const input = updateProjectInput.parse(req.body);
     ctx.repo.updateProject(project.id, input);
-    return { project: serializeProject(ctx, requireProject(ctx, project.id)) };
+    return { project: serializeProject(ctx, requireProject(ctx, project.id, req.user)) };
   });
 
   app.delete<{ Params: { id: string } }>("/api/projects/:id", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const deployments = ctx.repo.listDeployments(project.id, 10_000);
     for (const d of deployments) if (d.status === "queued" || d.status === "building") ctx.deployments.queue.cancel(d.id);
     ctx.repo.deleteProject(project.id);
@@ -133,29 +144,30 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
   // ------------------------------------------------------------- deployments
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/deployments", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const productionId = ctx.repo.productionDeploymentId(project.id);
     return { deployments: ctx.repo.listDeployments(project.id).map((d) => serializeDeployment(ctx, d, productionId)) };
   });
 
   /** Deploy the latest commit of a branch (defaults to the production branch). */
   app.post<{ Params: { id: string } }>("/api/projects/:id/deployments", async (req, reply) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const { branch = project.productionBranch } = z.object({ branch: z.string().min(1).optional() }).parse(req.body ?? {});
+    ctx.access.assertCanBuild(req.user!);
     const deployment = ctx.deployments.create(project, { branch, trigger: "manual" });
     reply.code(201);
     return { deployment: serializeDeployment(ctx, deployment) };
   });
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/rollback", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const { deploymentId } = z.object({ deploymentId: z.string().optional() }).parse(req.body ?? {});
     const target = ctx.deployments.rollback(project, deploymentId);
     return { deployment: serializeDeployment(ctx, ctx.repo.getDeployment(target.id)!) };
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/branches", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const remote = await lsRemote(project.repoUrl, await ctx.githubApp.tokenFor(project.repoUrl));
     return remote;
   });
@@ -163,19 +175,19 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
   // ---------------------------------------------------------------- env vars
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/env", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     return { env: ctx.repo.listEnv(project.id) };
   });
 
   app.put<{ Params: { id: string; key: string } }>("/api/projects/:id/env/:key", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     const input = envVarInput.parse({ ...(req.body as object), key: req.params.key });
     ctx.repo.upsertEnv(project.id, input.key, input.value, input.targets);
     return { env: ctx.repo.listEnv(project.id) };
   });
 
   app.delete<{ Params: { id: string; key: string } }>("/api/projects/:id/env/:key", async (req) => {
-    const project = requireProject(ctx, req.params.id);
+    const project = requireProject(ctx, req.params.id, req.user);
     ctx.repo.deleteEnv(project.id, req.params.key);
     return { env: ctx.repo.listEnv(project.id) };
   });

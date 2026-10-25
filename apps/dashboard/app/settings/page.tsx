@@ -11,7 +11,7 @@ import { useApi } from "@/lib/use-api";
 export default function SettingsPage() {
   return (
     <>
-      <PageHeader title="Settings" subtitle="Your account, API tokens and the GitHub connection for this Orbit instance." />
+      <PageHeader title="Settings" subtitle="Your account, API tokens and GitHub access." />
       <div className="mx-auto max-w-3xl space-y-8 py-8">
         <GitHubSection />
         <TokensSection />
@@ -65,6 +65,8 @@ function GitHubSection() {
     await refresh();
   }
 
+  if (data && !data.canManage) return <MemberGitHubSection status={data} justInstalled={justInstalled} />;
+
   return (
     <Card>
       <div className="space-y-4 p-6">
@@ -72,7 +74,7 @@ function GitHubSection() {
           <h2 className="font-medium text-white">GitHub</h2>
           <p className="mt-1 text-sm text-muted">
             A GitHub App lets Orbit deploy private repositories, receive pushes instantly, and post commit statuses and preview
-            comments on pull requests.
+            comments on pull requests. People also sign in to Orbit with it.
           </p>
         </div>
         {error && <ErrorNote>{error.message}</ErrorNote>}
@@ -137,7 +139,59 @@ function GitHubSection() {
                 Disconnect
               </Button>
             </div>
+            <div className="space-y-1 rounded-md border border-line px-4 py-3 text-[13px] text-muted">
+              <p className="text-fg">Sign in with GitHub</p>
+              <p>
+                In the app&apos;s settings on GitHub, set the <span className="text-fg">Callback URL</span> to{" "}
+                <span className="break-all font-mono text-fg">{data.signInCallbackUrl}</span>. For other people to sign up and
+                install it on their repositories, also make the app public (Advanced → Make public).
+              </p>
+            </div>
           </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/** What a member sees: the accounts they've installed Orbit on, and a link to add more. */
+function MemberGitHubSection({ status, justInstalled }: { status: GitHubStatus; justInstalled: boolean }) {
+  return (
+    <Card>
+      <div className="space-y-4 p-6">
+        <div>
+          <h2 className="font-medium text-white">GitHub</h2>
+          <p className="mt-1 text-sm text-muted">
+            Install the Orbit app on the repositories you want to deploy. Pushes then deploy instantly, and pull requests get
+            preview links.
+          </p>
+        </div>
+        {status.error && <ErrorNote>{status.error}</ErrorNote>}
+        {justInstalled && (
+          <div className="rounded-md border border-ok/40 bg-ok/10 px-3 py-2 text-sm text-ok">GitHub App installed.</div>
+        )}
+        <div className="rounded-md border border-line">
+          {status.installations.length === 0 && (
+            <p className="px-4 py-3 text-sm text-muted">Not installed on any of your accounts yet.</p>
+          )}
+          {status.installations.map((i) => (
+            <div key={i.id} className="flex items-center gap-3 border-b border-line px-4 py-3 text-sm last:border-b-0">
+              {i.avatarUrl && <img src={i.avatarUrl} alt="" className="h-5 w-5 rounded-full" />}
+              <span className="text-fg">{i.account}</span>
+              <span className="text-muted">{i.repositorySelection === "all" ? "All repositories" : "Selected repositories"}</span>
+              <a href={i.settingsUrl} target="_blank" rel="noreferrer" className="ml-auto text-muted hover:text-fg">
+                Configure
+              </a>
+            </div>
+          ))}
+        </div>
+        {status.app && (
+          <a
+            href={status.app.installUrl}
+            className="inline-flex h-8 items-center rounded-md bg-white px-3 text-[13px] font-medium text-black hover:bg-white/90"
+          >
+            {status.installations.length ? "Install on another account" : "Install on GitHub"}
+          </a>
         )}
       </div>
     </Card>
@@ -218,6 +272,27 @@ function TokensSection() {
 
 function AccountSection() {
   const { user } = useAuth();
+  if (user && !user.hasPassword) {
+    return (
+      <Card>
+        <div className="flex items-center gap-4 p-6">
+          {user.avatarUrl && <img src={user.avatarUrl} alt="" className="h-10 w-10 rounded-full border border-line" />}
+          <div>
+            <h2 className="font-medium text-white">Account</h2>
+            <p className="mt-1 text-sm text-muted">
+              Signed in with GitHub as <span className="text-fg">@{user.githubLogin}</span>
+              {user.role === "admin" ? " (admin)" : ""}.
+            </p>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+  return <PasswordSection />;
+}
+
+function PasswordSection() {
+  const { user } = useAuth();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -245,7 +320,8 @@ function AccountSection() {
         <div>
           <h2 className="font-medium text-white">Account</h2>
           <p className="mt-1 text-sm text-muted">
-            Signed in as <span className="text-fg">{user?.email}</span>.
+            Signed in as <span className="text-fg">{user?.githubLogin ? `@${user.githubLogin}` : user?.email}</span>
+            {user?.role === "admin" ? " (admin)" : ""}. This account can also sign in with a password.
           </p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">

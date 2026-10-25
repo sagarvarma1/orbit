@@ -21,6 +21,8 @@ export interface Project {
   outputDirectory: string | null;
   rootDirectory: string;
   autoPromotePaused: boolean;
+  /** The user who owns the project; only they (and admins) can see or change it. */
+  ownerId: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -70,11 +72,35 @@ export interface Domain {
   createdAt: number;
 }
 
+export type UserRole = "admin" | "member";
+
+/** A GitHub user-to-server token (they expire after 8 hours; the refresh token lasts months). */
+export interface GitHubUserToken {
+  accessToken: string;
+  /** null when the GitHub App doesn't expire user tokens. */
+  expiresAt: number | null;
+  refreshToken: string | null;
+}
+
 export interface User {
   id: string;
   email: string;
+  /** Empty for accounts that only sign in with GitHub. */
   passwordHash: string;
+  role: UserRole;
+  githubId: number | null;
+  githubLogin: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+  githubToken: GitHubUserToken | null;
   createdAt: number;
+}
+
+export interface GitHubProfile {
+  githubId: number;
+  githubLogin: string;
+  name: string | null;
+  avatarUrl: string | null;
 }
 
 export interface ApiToken {
@@ -100,6 +126,12 @@ const toUser = (r: Row): User => ({
   id: r.id as string,
   email: r.email as string,
   passwordHash: r.password_hash as string,
+  role: r.role === "admin" ? "admin" : "member",
+  githubId: r.github_id == null ? null : Number(r.github_id),
+  githubLogin: (r.github_login as string | null) ?? null,
+  name: (r.name as string | null) ?? null,
+  avatarUrl: (r.avatar_url as string | null) ?? null,
+  githubToken: r.github_token ? (JSON.parse(r.github_token as string) as GitHubUserToken) : null,
   createdAt: Number(r.created_at),
 });
 
@@ -123,6 +155,7 @@ const toProject = (r: Row): Project => ({
   outputDirectory: (r.output_directory as string | null) ?? null,
   rootDirectory: (r.root_directory as string) ?? "",
   autoPromotePaused: Boolean(r.auto_promote_paused),
+  ownerId: (r.owner_id as string | null) ?? null,
   createdAt: Number(r.created_at),
   updatedAt: Number(r.updated_at),
 });
@@ -162,8 +195,27 @@ export class Repo {
 
   // ---------------------------------------------------------------- projects
 
-  listProjects(): Project[] {
-    return (this.db.prepare("SELECT * FROM projects ORDER BY updated_at DESC").all() as Row[]).map(toProject);
+  /** Every project, or only one user's. */
+  listProjects(ownerId?: string): Project[] {
+    const rows = ownerId
+      ? this.db.prepare("SELECT * FROM projects WHERE owner_id = ? ORDER BY updated_at DESC").all(ownerId)
+      : this.db.prepare("SELECT * FROM projects ORDER BY updated_at DESC").all();
+    return (rows as Row[]).map(toProject);
+  }
+
+  countProjects(ownerId: string): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE owner_id = ?").get(ownerId) as Row).n);
+  }
+
+  /** Queued or building deployments across a user's projects. */
+  countActiveDeployments(ownerId: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM deployments JOIN projects ON projects.id = deployments.project_id
+         WHERE projects.owner_id = ? AND deployments.status IN ('queued', 'building')`,
+      )
+      .get(ownerId) as Row;
+    return Number(row.n);
   }
 
   getProject(idOrName: string): Project | undefined {
@@ -175,8 +227,8 @@ export class Repo {
     this.db
       .prepare(
         `INSERT INTO projects (id, name, repo_url, production_branch, framework, install_command, build_command,
-           output_directory, root_directory, auto_promote_paused, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           output_directory, root_directory, auto_promote_paused, owner_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         p.id,
@@ -189,6 +241,7 @@ export class Repo {
         p.outputDirectory,
         p.rootDirectory,
         p.autoPromotePaused ? 1 : 0,
+        p.ownerId,
         p.createdAt,
         p.updatedAt,
       );
@@ -458,10 +511,48 @@ export class Repo {
     return row ? toUser(row) : undefined;
   }
 
+  getUserByGithubId(githubId: number): User | undefined {
+    const row = this.db.prepare("SELECT * FROM users WHERE github_id = ?").get(githubId) as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+
+  /** The earliest admin that hasn't been linked to a GitHub account yet. */
+  unlinkedAdmin(): User | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM users WHERE role = 'admin' AND github_id IS NULL ORDER BY created_at LIMIT 1")
+      .get() as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+
   insertUser(u: User): void {
     this.db
-      .prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
-      .run(u.id, u.email, u.passwordHash, u.createdAt);
+      .prepare(
+        `INSERT INTO users (id, email, password_hash, role, github_id, github_login, name, avatar_url, github_token, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        u.id,
+        u.email,
+        u.passwordHash,
+        u.role,
+        u.githubId,
+        u.githubLogin,
+        u.name,
+        u.avatarUrl,
+        u.githubToken ? JSON.stringify(u.githubToken) : null,
+        u.createdAt,
+      );
+  }
+
+  /** Links (or refreshes) a user's GitHub identity, as of their latest sign-in. */
+  updateUserGithub(id: string, profile: GitHubProfile, token: GitHubUserToken | null): void {
+    this.db
+      .prepare("UPDATE users SET github_id = ?, github_login = ?, name = ?, avatar_url = ?, github_token = ? WHERE id = ?")
+      .run(profile.githubId, profile.githubLogin, profile.name, profile.avatarUrl, token ? JSON.stringify(token) : null, id);
+  }
+
+  updateUserGithubToken(id: string, token: GitHubUserToken | null): void {
+    this.db.prepare("UPDATE users SET github_token = ? WHERE id = ?").run(token ? JSON.stringify(token) : null, id);
   }
 
   updateUserPassword(id: string, passwordHash: string): void {
