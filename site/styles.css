@@ -489,6 +489,7 @@ h5 {
   overflow: hidden;
 }
 .shot-list li {
+  height: 49px;
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) 120px 96px 72px;
   align-items: center;
@@ -525,13 +526,16 @@ h5 {
 }
 .d-env {
   justify-self: start;
+  /* Same box whether or not it's the Production badge, so rows never change height. */
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  line-height: 18px;
   color: var(--muted);
   font-size: 12px;
 }
 .d-env.d-prod {
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(62, 207, 142, 0.35);
+  border-color: rgba(62, 207, 142, 0.35);
   background: rgba(62, 207, 142, 0.08);
   color: var(--ok);
 }
@@ -834,7 +838,9 @@ h2 {
   margin-top: 32px;
   color: var(--muted);
   font-size: 14px;
-  min-height: 22px;
+  text-align: center;
+  /* Room for the longest message on two lines, so the box never resizes. */
+  min-height: 44px;
 }
 
 /* code cards */

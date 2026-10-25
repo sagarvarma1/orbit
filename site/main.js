@@ -28,6 +28,9 @@ async function playShot() {
     await sleep(2600);
     const commit = COMMITS[i];
     const li = row(commit);
+    // Swap rows in the same frame so the list (and the page) never changes height; a taller
+    // page for a few seconds makes the browser shift the scroll position under the reader.
+    list.lastElementChild?.remove();
     list.prepend(li);
     const time = li.querySelector(".d-time");
     for (let s = 1; s <= 4; s++) {
@@ -45,7 +48,6 @@ async function playShot() {
     preview.classList.remove("fresh");
     void preview.offsetWidth;
     preview.classList.add("fresh");
-    while (list.children.length > 3) list.lastElementChild.remove();
   }
 }
 
