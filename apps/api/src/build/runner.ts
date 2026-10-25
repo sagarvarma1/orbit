@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Config } from "../config.js";
@@ -108,9 +109,14 @@ export class ProcessRunner implements CommandRunner {
 export class DockerRunner implements CommandRunner {
   readonly kind = "docker" as const;
   readonly description: string;
+  private readonly cpus: string;
 
   constructor(private readonly config: Config) {
-    this.description = `docker (${config.buildImage}, ${config.buildCpus} cpu, ${config.buildMemory})`;
+    // Docker rejects --cpus above the host's core count, so a 1-CPU server can't use the default of 2.
+    const requested = Number(config.buildCpus);
+    const available = os.availableParallelism();
+    this.cpus = requested > available ? String(available) : config.buildCpus;
+    this.description = `docker (${config.buildImage}, ${this.cpus} cpu, ${config.buildMemory})`;
   }
 
   /** Host path for a path under the data dir (for sibling containers via the Docker socket). */
@@ -136,7 +142,7 @@ export class DockerRunner implements CommandRunner {
       "--name",
       containerName,
       "--cpus",
-      this.config.buildCpus,
+      this.cpus,
       "--memory",
       this.config.buildMemory,
       "--pids-limit",
