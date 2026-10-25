@@ -201,6 +201,7 @@ The GitHub App flow works locally too; its webhook is simply left inactive.
 pnpm test        # unit tests: auth, domains, GitHub App, detection (incl. monorepos), edge, routing, cache, queue, webhooks
 pnpm e2e         # boots a real control plane + edge and deploys real repos end to end
 pnpm e2e --next  # also builds Next.js apps: a static export, and server rendering with redeploy and rollback
+./scripts/sandbox-test.sh --e2e  # sandbox tests + full e2e as root in a Linux container (needs Docker)
 ```
 
 The e2e suite (68 checks, 87 with `--next`) signs in, issues an API token, and deploys `mdn/beginner-html-site-styled` and a Vite app
@@ -235,10 +236,20 @@ GET    /api/tls/allowed?domain=               (Caddy on-demand TLS check)
 
 - Builds run untrusted code. On a public server they run in Docker containers with resource limits and no access
   to Orbit's secrets; the child-process builder is for local development only.
-- Functions and Next.js servers run with Node's permission model: read-only access to their own deployment, no child
-  processes, so one account's code can't read another's files, env vars or Orbit's database. Node documents this
-  model as a guard rail rather than a hardened sandbox, so an instance with open sign-ups trusts its users more than
-  Vercel's microVMs would; per-deployment containers are on the roadmap.
+- Deployment code (functions and Next.js servers) is isolated in three layers:
+  1. **Its own Linux user per project.** Artifacts belong to that user's group (read-only), the env file the edge
+     passes in is root-only, and the database, build logs, caches and other projects' files are unreadable. Each
+     server's writable cache directory belongs to its user alone.
+  2. **A firewall** (iptables, in the edge container's network namespace) stops those users from connecting to
+     private addresses: Orbit's API, the Docker network, localhost services and the cloud metadata endpoint. The
+     public internet stays reachable.
+  3. **Node's permission model** on top: reads limited to the deployment's own files, no file writes outside its
+     cache, no child processes, workers or native addons. Code also runs at lower CPU priority than the edge.
+
+  Layers 1 and 2 need Linux and root, which is how the edge runs in its container (the firewall needs `NET_ADMIN`,
+  set in `deploy/docker-compose.yml`); the edge logs which layers are on at startup. CI runs the sandbox tests and the
+  full e2e suite as root to check them. Processes still share one kernel, unlike Vercel's microVMs.
+
 - Accounts only see their own projects (others' return 404), and members can only import repositories they can push
   to, so the GitHub App's installation access can't be borrowed to read someone else's private code.
 - The dashboard and API share one origin in production. Deployments live on sibling subdomains, so state-changing
@@ -256,7 +267,8 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
   (no TXT ownership check).
 - `vercel.json` covers `redirects`, `rewrites` (internal paths only) and `headers`, without `has`/`missing`.
 - The build cache is skipped for monorepos and custom install commands, where skipping install isn't safe.
-- Function and app-server sandboxes use Node's permission model, not VMs. A first request after idle is a cold start.
+- Deployment code is isolated with per-project users, a firewall and Node's permission model, not VMs or containers
+  per deployment. A first request after idle is a cold start.
 - Each deployment hostname gets its own certificate on first visit. Let's Encrypt allows 50 certificates per domain
   per week; heavy preview use should switch to a wildcard certificate ([docs/self-hosting.md](docs/self-hosting.md)).
 
@@ -265,7 +277,7 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 - ISR, middleware and image optimization for Next.js; more SSR frameworks
 - Runtime logs and basic analytics
 - Teams (shared projects), domain ownership verification
-- Per-deployment containers for functions and app servers
+- Per-deployment containers (or gVisor) for functions and app servers
 - `orbit` CLI (`orbit deploy` from any folder)
 
 ## Contributing

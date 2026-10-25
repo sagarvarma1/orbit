@@ -129,6 +129,8 @@ const ADDED_COLUMNS: [string, string, string][] = [
   ["users", "avatar_url", "TEXT"],
   ["users", "github_token", "TEXT"],
   ["projects", "owner_id", "TEXT"],
+  // The Linux user a project's code runs as (SANDBOX_UID_BASE + this), see lib/sandbox.ts.
+  ["projects", "sandbox_id", "INTEGER"],
 ];
 
 /**
@@ -143,6 +145,8 @@ UPDATE users SET role = 'admin'
     AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin');
 UPDATE projects SET owner_id = (SELECT id FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1)
   WHERE owner_id IS NULL;
+UPDATE projects SET sandbox_id = (SELECT COALESCE(MAX(sandbox_id), 0) FROM projects) + rowid WHERE sandbox_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS projects_sandbox_idx ON projects(sandbox_id);
 `;
 
 function addMissingColumns(db: Db): void {

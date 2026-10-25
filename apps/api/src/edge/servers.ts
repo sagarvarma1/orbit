@@ -2,6 +2,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { prepareRuntimeDir, type SandboxIdentity } from "../lib/sandbox.js";
+import { deprioritize } from "./functions.js";
 
 export interface ServerPoolOptions {
   /** Servers kept running at once; the least recently used idle one stops to make room. */
@@ -23,6 +25,8 @@ export interface StartOptions {
   /** Writable per-deployment directory; the server's .next/cache links into it. */
   runtimeDir: string;
   env: Record<string, string>;
+  /** Run as this OS user (Linux, when the edge is root). */
+  sandbox?: SandboxIdentity | null;
 }
 
 export class ServerStartError extends Error {}
@@ -118,6 +122,7 @@ export class ServerPool {
     if (existing) return existing;
 
     fs.mkdirSync(path.join(start.runtimeDir, "cache"), { recursive: true });
+    if (start.sandbox) prepareRuntimeDir(start.runtimeDir, start.sandbox);
     // The permission model checks real paths, so resolve symlinks (macOS: /tmp -> /private/tmp).
     const root = fs.realpathSync(start.root);
     const runtimeDir = fs.realpathSync(start.runtimeDir);
@@ -134,6 +139,7 @@ export class ServerPool {
         entry,
       ],
       {
+        ...(start.sandbox ? { uid: start.sandbox.uid, gid: start.sandbox.gid } : {}),
         cwd: path.dirname(entry),
         env: {
           ...start.env,
@@ -146,6 +152,7 @@ export class ServerPool {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    deprioritize(child.pid);
 
     const server: Running = {
       deploymentId: start.deploymentId,

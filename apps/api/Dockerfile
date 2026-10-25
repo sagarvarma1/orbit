@@ -18,8 +18,9 @@ RUN pnpm install --frozen-lockfile --prod --filter @orbit/api
 
 FROM base AS runtime
 # git: cloning repos. docker CLI: launching isolated build containers via the host socket.
+# iptables: the edge's firewall for deployment code (lib/sandbox.ts).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends git ca-certificates iptables \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=prod-deps /app/node_modules ./node_modules

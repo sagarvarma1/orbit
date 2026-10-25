@@ -8,9 +8,28 @@ import { openDb } from "./db/index.js";
 import { Repo } from "./db/repo.js";
 import { createEdgeHandler, type TargetLookup } from "./edge/server.js";
 import { DEPLOYMENT_ID_RE } from "./lib/ids.js";
+import { blockingParent, disableSandbox, installFirewall, lockDataDir, sandboxAvailable } from "./lib/sandbox.js";
 import { branchAliasLabel } from "./lib/urls.js";
 
 const repo = new Repo(openDb(config.dbPath));
+
+// Deployment code runs as per-project users (Linux, as root); keep it away from Orbit's own state.
+const blocked = sandboxAvailable() ? blockingParent(config.dataDir) : null;
+if (blocked) {
+  disableSandbox(`${blocked} isn't traversable`);
+  console.error(
+    `Sandbox: per-project users OFF: other users can't pass through ${blocked} to reach the data directory. Run \`chmod o+x ${blocked}\` and restart.`,
+  );
+}
+if (sandboxAvailable()) {
+  lockDataDir(config);
+  const firewall = installFirewall();
+  console.log(`Sandbox: per-project users on · firewall ${firewall.ok ? "on" : "OFF"}: ${firewall.detail}`);
+  if (!firewall.ok)
+    console.warn("  Give the edge container NET_ADMIN (see deploy/docker-compose.yml) to block private networks.");
+} else {
+  console.log("Sandbox: Node permission model only (per-project users need Linux and root)");
+}
 
 /** `<deploymentId>` is an immutable preview; anything else is an alias (production or branch). */
 const lookup: TargetLookup = {
@@ -27,6 +46,7 @@ const lookup: TargetLookup = {
     if (!domain || !project) return null;
     return this.resolve(domain.branch ? branchAliasLabel(project.name, domain.branch) : project.name);
   },
+  sandboxId: (deploymentId) => repo.sandboxId(deploymentId),
 };
 
 const handle = createEdgeHandler({

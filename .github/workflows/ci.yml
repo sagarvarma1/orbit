@@ -23,3 +23,12 @@ jobs:
         run: ORBIT_BUILDER=process node scripts/e2e.mjs --next
       - name: Dashboard production build
         run: pnpm --filter @orbit/dashboard build
+
+  sandbox:
+    # Production's edge runs as root on Linux: deployment code runs as per-project users behind a
+    # firewall. Test exactly that, including full deployments, in a root container.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sandbox tests and end-to-end as root
+        run: ./scripts/sandbox-test.sh --e2e

@@ -16,6 +16,7 @@ import { type BuildSettings, findWorkspaceRoot, normalizeRelative, readSnapshot,
 import { BuildCache, computeCacheKey } from "./cache.js";
 import { bundleFunctions } from "./functions.js";
 import { type CommitInfo, shallowCheckout } from "./git.js";
+import { lockArtifact } from "../lib/sandbox.js";
 import type { CommandRunner } from "./runner.js";
 
 /** A failure the user caused (bad command, missing output). Shown verbatim, no stack. */
@@ -398,6 +399,8 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
     };
     fs.writeFileSync(path.join(stagingDir, MANIFEST_FILE), JSON.stringify(manifest, null, 2));
     throwIfAborted(signal);
+    // Root-only until the edge hands it to the project's sandbox user.
+    lockArtifact(stagingDir);
     fs.renameSync(stagingDir, artifactDir);
 
     // 8. Save the build cache for the next deployment ------------------------------

@@ -27,6 +27,8 @@ const API = `http://127.0.0.1:${API_PORT}`;
 const GITHUB_PORT = 4199;
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-e2e-"));
+// Run as root on Linux, deployment code runs as per-project users, who must be able to reach the data dir.
+fs.chmodSync(tmp, 0o755);
 const dataDir = path.join(tmp, "data");
 const children = [];
 const ADMIN = { email: "e2e@example.com", password: "e2e-password-123" };

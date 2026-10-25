@@ -203,6 +203,16 @@ export class Repo {
     return (rows as Row[]).map(toProject);
   }
 
+  /** The sandbox user number of the project a deployment belongs to. */
+  sandboxId(deploymentId: string): number | null {
+    const row = this.db
+      .prepare(
+        "SELECT projects.sandbox_id AS n FROM deployments JOIN projects ON projects.id = deployments.project_id WHERE deployments.id = ?",
+      )
+      .get(deploymentId) as Row | undefined;
+    return row?.n == null ? null : Number(row.n);
+  }
+
   countProjects(ownerId: string): number {
     return Number((this.db.prepare("SELECT COUNT(*) AS n FROM projects WHERE owner_id = ?").get(ownerId) as Row).n);
   }
@@ -227,8 +237,8 @@ export class Repo {
     this.db
       .prepare(
         `INSERT INTO projects (id, name, repo_url, production_branch, framework, install_command, build_command,
-           output_directory, root_directory, auto_promote_paused, owner_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           output_directory, root_directory, auto_promote_paused, owner_id, created_at, updated_at, sandbox_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sandbox_id), 0) + 1 FROM projects))`,
       )
       .run(
         p.id,

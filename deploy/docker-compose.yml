@@ -44,6 +44,10 @@ services:
   edge:
     image: ${ORBIT_IMAGE_PREFIX:-ghcr.io/sagarvarma1/orbit}-api:${ORBIT_VERSION:-latest}
     command: ["node", "--disable-warning=ExperimentalWarning", "dist/edge.js"]
+    # Lets the edge install its firewall: deployment code (functions, Next.js servers) runs as
+    # per-project users who can reach the internet but not Orbit's API, the Docker network or
+    # the cloud metadata service. The rules live in this container's network namespace only.
+    cap_add: [NET_ADMIN]
     environment:
       <<: *orbit-env
     volumes:

@@ -13,6 +13,7 @@ import {
   type DeploymentManifest,
 } from "../lib/manifest.js";
 import { compileRouting, type CompiledRouting } from "../lib/routing.js";
+import { prepareArtifact, SANDBOX_UID_BASE, type SandboxIdentity, sandboxIdentity } from "../lib/sandbox.js";
 import { FunctionCache } from "./function-cache.js";
 import { FunctionPool, FunctionTimeoutError, matchFunction } from "./functions.js";
 import { platformPage } from "./pages.js";
@@ -37,6 +38,8 @@ export interface TargetLookup {
   resolve(label: string): ResolvedTarget | null;
   /** Custom domains (anything not under the root domain). */
   resolveDomain?(hostname: string): ResolvedTarget | null;
+  /** The project's sandbox number, so its code runs as its own OS user (see lib/sandbox.ts). */
+  sandboxId?(deploymentId: string): number | null;
 }
 
 export interface EdgeOptions {
@@ -97,6 +100,20 @@ export function createEdgeHandler(opts: EdgeOptions) {
   const runtimeDir = opts.runtimeDir ?? path.join(path.dirname(opts.artifactsDir), RUNTIME_DIR);
   const deployments = new Map<string, LoadedDeployment>();
   const maxBody = opts.maxBodyBytes ?? 4.5 * 1024 * 1024;
+  /** Deployments whose files have been handed to their sandbox user, by deployment id. */
+  const sandboxes = new Map<string, SandboxIdentity | null>();
+
+  /** The OS user a deployment's code runs as (null: same user as the edge, permission model only). */
+  function sandboxFor(deploymentId: string): SandboxIdentity | null {
+    if (sandboxes.has(deploymentId)) return sandboxes.get(deploymentId)!;
+    const n = opts.lookup.sandboxId?.(deploymentId);
+    const identity = sandboxIdentity(n ? SANDBOX_UID_BASE + n : null);
+    if (identity) prepareArtifact(path.join(opts.artifactsDir, deploymentId), identity);
+    if (sandboxes.size >= MANIFEST_CACHE_LIMIT) sandboxes.delete(sandboxes.keys().next().value!);
+    sandboxes.set(deploymentId, identity);
+    return identity;
+  }
+
   /** Headers from the deployment's vercel.json, merged into whatever response the request ends with. */
   const customHeaders = new WeakMap<ServerResponse, Record<string, string>>();
 
@@ -157,6 +174,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
 
     const artifactDir = path.join(opts.artifactsDir, manifest.deploymentId);
     const env = readEnv(artifactDir);
+    const sandbox = sandboxFor(manifest.deploymentId);
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers))
       if (value !== undefined) headers[key] = Array.isArray(value) ? value.join(", ") : value;
@@ -170,6 +188,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
         params: match.params,
         request: { method, url: url.toString(), headers, body: Buffer.concat(chunks) },
         env,
+        sandbox,
         timeoutMs: match.route.maxDurationMs ?? opts.functionTimeoutMs,
         memoryMb: match.route.memoryMb ?? opts.functionMemoryMb,
         onLog: (stream, text) => opts.log?.(`[fn ${manifest.deploymentId}${match.route.route}] ${stream}: ${text.trimEnd()}`),
@@ -242,6 +261,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
           root: path.join(artifactDir, SERVER_DIR),
           runtimeDir: path.join(runtimeDir, id),
           env: readEnv(artifactDir),
+          sandbox: sandboxFor(id),
         },
         (port, cold) =>
           new Promise<void>((resolve, reject) => {

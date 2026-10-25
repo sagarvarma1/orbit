@@ -1,8 +1,23 @@
 import { type ChildProcess, fork } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FUNCTIONS_DIR, type FunctionRoute } from "../lib/manifest.js";
+import type { SandboxIdentity } from "../lib/sandbox.js";
+
+/** Deployment code runs below the edge's priority, so a busy app can't starve request routing. */
+export const SANDBOX_NICE = 10;
+
+/** Lowers a child's CPU priority; best effort. */
+export function deprioritize(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    os.setPriority(pid, SANDBOX_NICE);
+  } catch {
+    // Not permitted on this platform; harmless.
+  }
+}
 
 const RUNNER = fs.realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../runtime/function-runner.mjs"));
 
@@ -55,6 +70,8 @@ export interface InvokeOptions {
   params: Record<string, string>;
   request: FunctionRequest;
   env: Record<string, string>;
+  /** Run as this OS user (Linux, when the edge is root). */
+  sandbox?: SandboxIdentity | null;
   timeoutMs: number;
   memoryMb: number;
   onLog?: (stream: "stdout" | "stderr", text: string) => void;
@@ -98,9 +115,12 @@ class Instance {
     functionsDir: string,
     memoryMb: number,
     env: Record<string, string>,
+    sandbox: SandboxIdentity | null,
     private readonly onExit: (instance: Instance) => void,
   ) {
     this.child = fork(RUNNER, [], {
+      // Its own OS user when available: file permissions then back up the permission model.
+      ...(sandbox ? { uid: sandbox.uid, gid: sandbox.gid } : {}),
       execArgv: [
         `--max-old-space-size=${memoryMb}`,
         "--permission",
@@ -114,6 +134,7 @@ class Instance {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       serialization: "json",
     });
+    deprioritize(this.child.pid);
     this.child.stdout?.setEncoding("utf8").on("data", (t: string) => this.pending?.onLog?.("stdout", t));
     this.child.stderr?.setEncoding("utf8").on("data", (t: string) => this.pending?.onLog?.("stderr", t));
     this.child.on("message", (msg: RunnerMessage) => {
@@ -223,12 +244,14 @@ export class FunctionPool {
     // The permission model checks real paths, so resolve symlinks (macOS: /tmp -> /private/tmp).
     const artifactDir = fs.realpathSync(opts.artifactDir);
     const file = path.join(artifactDir, opts.route.file);
-    const key = `${file}\0${opts.memoryMb}`;
+    const key = `${file}\0${opts.memoryMb}\0${opts.sandbox?.uid ?? ""}`;
 
     let instance = this.takeIdle(key);
     const warm = instance !== undefined;
     if (!instance) {
-      instance = new Instance(key, path.join(artifactDir, FUNCTIONS_DIR), opts.memoryMb, opts.env, (i) => this.forget(i));
+      instance = new Instance(key, path.join(artifactDir, FUNCTIONS_DIR), opts.memoryMb, opts.env, opts.sandbox ?? null, (i) =>
+        this.forget(i),
+      );
       this.all.add(instance);
     }
     try {

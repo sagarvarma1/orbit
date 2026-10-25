@@ -9,6 +9,7 @@ import { LogStore } from "./build/logs.js";
 import { createRunner } from "./build/runner.js";
 import { openDb } from "./db/index.js";
 import { Repo } from "./db/repo.js";
+import { lockDataDir } from "./lib/sandbox.js";
 import { DeploymentService } from "./services/deployments.js";
 import { GitSync } from "./services/git-sync.js";
 import { AuthService } from "./services/auth.js";
@@ -20,6 +21,8 @@ async function main(): Promise<void> {
     fs.mkdirSync(dir, { recursive: true });
 
   const repo = new Repo(openDb(config.dbPath));
+  // Deployment code runs as unprivileged users on Linux; it must not read the database, logs or caches.
+  lockDataDir(config);
   const logs = new LogStore(config.logsDir);
   const runner = await createRunner(config);
   const githubApp = new GitHubApp(repo, config);
