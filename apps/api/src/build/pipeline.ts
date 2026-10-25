@@ -130,8 +130,9 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
     const projectDir = path.join(workspace, rootDirectory);
     if (!fs.existsSync(projectDir)) throw new BuildError(`Root directory "${rootDirectory}" does not exist in the repository`);
 
+    const snapshot = readSnapshot(projectDir);
     const settings = resolveBuildSettings(
-      readSnapshot(projectDir),
+      snapshot,
       {
         framework: project.framework,
         installCommand: project.installCommand,
@@ -149,6 +150,7 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
         `Monorepo: installing from ${settings.workspaceRoot === "." ? "the repository root" : `"${settings.workspaceRoot}"`}, building "${rootDirectory}"`,
       );
     }
+    if (settings.fromConfig.length) log.system(`Build settings from vercel.json: ${settings.fromConfig.join(", ")}`);
     for (const warning of settings.warnings) log.system(`Warning: ${warning}`);
     const routing = readRoutingConfig(projectDir);
     if (hasRoutingRules(routing)) {
@@ -269,15 +271,23 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
 
     // 6. Functions --------------------------------------------------------------
     throwIfAborted(signal);
-    const functions = await bundleFunctions(projectDir, path.join(stagingDir, FUNCTIONS_DIR)).catch((err: Error) => {
+    const vercelFunctions = (snapshot.vercelJson as { functions?: unknown } | undefined)?.functions;
+    const bundled = await bundleFunctions(projectDir, path.join(stagingDir, FUNCTIONS_DIR), {
+      config: vercelFunctions,
+      maxMemoryMb: config.functionMaxMemoryMb,
+      maxDurationSeconds: config.functionMaxDurationSeconds,
+      warn: (message) => log.system(`Warning: ${message}`),
+    }).catch((err: Error) => {
       throw new BuildError(`Bundling functions failed: ${err.message}`);
     });
+    const functions = bundled.routes;
     if (functions.length) {
       // Like Vercel, a deployment's functions see the env as of build time, so the artifact stays immutable.
       const { CI: _ci, ...runtimeEnv } = buildEnv;
       fs.writeFileSync(path.join(stagingDir, FUNCTION_ENV_FILE), JSON.stringify(runtimeEnv), { mode: 0o600 });
     }
     if (functions.length) log.system(`Bundled ${functions.length} function(s): ${functions.map((f) => f.route).join(", ")}`);
+    if (bundled.includedFiles) log.system(`Included ${plural(bundled.includedFiles, "file")} with functions (includeFiles)`);
 
     // 7. Publish (atomic rename: the artifact appears complete or not at all) ---
     const manifest: DeploymentManifest = {

@@ -150,8 +150,8 @@ export function createEdgeHandler(opts: EdgeOptions) {
         params: match.params,
         request: { method: req.method!, url: url.toString(), headers, body: Buffer.concat(chunks) },
         env,
-        timeoutMs: opts.functionTimeoutMs,
-        memoryMb: opts.functionMemoryMb,
+        timeoutMs: match.route.maxDurationMs ?? opts.functionTimeoutMs,
+        memoryMb: match.route.memoryMb ?? opts.functionMemoryMb,
         onLog: (stream, text) => opts.log?.(`[fn ${manifest.deploymentId}${match.route.route}] ${stream}: ${text.trimEnd()}`),
       });
       const responseHeaders: Record<string, string> = { "cache-control": "no-store", ...out.headers };

@@ -100,6 +100,51 @@ describe("framework detection", () => {
   });
 });
 
+describe("vercel.json build settings", () => {
+  const withConfig = (vercelJson: unknown, packageJson: RepoSnapshot["packageJson"] = null, files: string[] = []) => ({
+    ...snap(packageJson, ["vercel.json", ...files]),
+    vercelJson,
+  });
+
+  it("uses outputDirectory for a static site (the americantimeuse.com layout)", () => {
+    const s = resolveBuildSettings(
+      withConfig({ framework: null, outputDirectory: "dist", cleanUrls: true }, null, ["dist", "api"]),
+    );
+    expect(s).toMatchObject({
+      framework: "static",
+      outputDirectory: "dist",
+      installCommand: null,
+      buildCommand: null,
+      cleanUrls: true,
+    });
+    expect(s.fromConfig).toEqual(["outputDirectory", "cleanUrls"]);
+  });
+
+  it("takes commands and framework from vercel.json, but dashboard settings still win", () => {
+    const config = { framework: "vite", buildCommand: "npm run build:site", installCommand: "", outputDirectory: "site" };
+    const pkg = { scripts: { build: "x" } };
+    expect(resolveBuildSettings(withConfig(config, pkg, ["package-lock.json"]))).toMatchObject({
+      framework: "vite",
+      buildCommand: "npm run build:site",
+      installCommand: null,
+      outputDirectory: "site",
+    });
+    expect(
+      resolveBuildSettings(withConfig(config, pkg, ["package-lock.json"]), { outputDirectory: "out", buildCommand: "make" }),
+    ).toMatchObject({ outputDirectory: "out", buildCommand: "make", installCommand: null });
+  });
+
+  it("warns about values it can't use instead of failing", () => {
+    const s = resolveBuildSettings(withConfig({ framework: "sveltekit", outputDirectory: 42 }));
+    expect(s.framework).toBe("static");
+    expect(s.outputDirectory).toBe(".");
+    expect(s.warnings).toEqual([
+      'vercel.json: "outputDirectory" must be a string; ignored.',
+      'vercel.json: framework "sveltekit" isn\'t supported; detecting instead.',
+    ]);
+  });
+});
+
 describe("package manager detection", () => {
   it("uses the packageManager field first, then lockfiles", () => {
     expect(detectPackageManager(snap({ packageManager: "pnpm@10.0.0" }, ["package-lock.json"]))).toBe("pnpm");

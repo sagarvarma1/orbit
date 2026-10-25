@@ -53,6 +53,9 @@ export const config = {
 
   functionTimeoutMs: int("FUNCTION_TIMEOUT_MS", 10_000),
   functionMemoryMb: int("FUNCTION_MEMORY_MB", 128),
+  /** Upper bounds for per-function `memory` / `maxDuration` in vercel.json. */
+  functionMaxMemoryMb: int("FUNCTION_MAX_MEMORY_MB", 1024),
+  functionMaxDurationSeconds: int("FUNCTION_MAX_DURATION_SECONDS", 60),
 
   githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
   /** Enables commit statuses and PR preview comments. Needs "Commit statuses" and "Pull requests" write access. */

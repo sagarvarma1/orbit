@@ -78,6 +78,8 @@ export function invokeFunction(opts: InvokeOptions): Promise<FunctionResponse> {
         `--allow-fs-read=${RUNNER}`,
         "--disable-warning=ExperimentalWarning",
       ],
+      // Like Vercel, the working directory is the function root, so relative reads of included files work.
+      cwd: functionsDir,
       env: { NODE_ENV: "production", PATH: process.env.PATH ?? "", ...opts.env },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       serialization: "json",

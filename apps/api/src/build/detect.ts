@@ -20,6 +20,8 @@ export interface RepoSnapshot {
   packageJson: PackageJson | null;
   /** Contents of next.config.* if present. */
   nextConfig?: string;
+  /** Parsed vercel.json, if present and valid JSON. */
+  vercelJson?: unknown;
 }
 
 /**
@@ -68,6 +70,8 @@ export interface BuildSettings {
   workspaceRoot: string | null;
   /** Where the build command runs: the project directory, or the workspace root (Turborepo). */
   buildFrom: "project" | "workspace";
+  /** Settings taken from vercel.json, for the build log. */
+  fromConfig: string[];
 }
 
 export interface BuildOverrides {
@@ -75,6 +79,37 @@ export interface BuildOverrides {
   installCommand?: string | null;
   buildCommand?: string | null;
   outputDirectory?: string | null;
+}
+
+const VERCEL_FRAMEWORKS: Record<string, FrameworkId> = {
+  nextjs: "nextjs",
+  astro: "astro",
+  "create-react-app": "create-react-app",
+  vite: "vite",
+};
+
+interface ConfigSettings extends BuildOverrides {
+  cleanUrls?: boolean;
+}
+
+/** The build-settings part of vercel.json. Bad values are skipped with a warning, not fatal. */
+function configSettings(vercelJson: unknown, warnings: string[]): ConfigSettings {
+  if (!vercelJson || typeof vercelJson !== "object") return {};
+  const json = vercelJson as Record<string, unknown>;
+  const out: ConfigSettings = {};
+  for (const key of ["installCommand", "buildCommand", "outputDirectory"] as const) {
+    const value = json[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string") out[key] = value;
+    else warnings.push(`vercel.json: "${key}" must be a string; ignored.`);
+  }
+  if (typeof json.framework === "string") {
+    const id = VERCEL_FRAMEWORKS[json.framework];
+    if (id) out.framework = id;
+    else warnings.push(`vercel.json: framework "${json.framework}" isn't supported; detecting instead.`);
+  }
+  if (typeof json.cleanUrls === "boolean") out.cleanUrls = json.cleanUrls;
+  return out;
 }
 
 function hasDep(pkg: PackageJson | null, name: string): boolean {
@@ -122,7 +157,11 @@ export function resolveBuildSettings(
 ): BuildSettings {
   const files = new Set(snapshot.files);
   const warnings: string[] = [];
-  const framework = overrides.framework ?? detectFrameworkId(snapshot);
+  // Precedence: project settings in the dashboard, then vercel.json, then detection.
+  const config = configSettings(snapshot.vercelJson, warnings);
+  const fromConfig: string[] = [];
+  const framework = overrides.framework ?? config.framework ?? detectFrameworkId(snapshot);
+  if (!overrides.framework && config.framework) fromConfig.push("framework");
   const preset = PRESETS[framework];
   // In a monorepo the lockfile and package manager are declared at the workspace root.
   const installFiles = new Set(workspace ? workspace.files : snapshot.files);
@@ -152,6 +191,22 @@ export function resolveBuildSettings(
     }
   }
 
+  // An empty string in vercel.json means "skip this step", like in the dashboard.
+  if (config.installCommand !== undefined && overrides.installCommand == null) {
+    installCommand = config.installCommand || null;
+    fromConfig.push("installCommand");
+  }
+  if (config.buildCommand !== undefined && overrides.buildCommand == null) {
+    buildCommand = config.buildCommand || null;
+    buildFrom = "project";
+    fromConfig.push("buildCommand");
+  }
+  if (config.outputDirectory && !overrides.outputDirectory) {
+    outputDirectory = config.outputDirectory;
+    fromConfig.push("outputDirectory");
+  }
+  if (config.cleanUrls !== undefined) fromConfig.push("cleanUrls");
+
   if (overrides.installCommand !== undefined && overrides.installCommand !== null)
     installCommand = overrides.installCommand || null;
   if (overrides.buildCommand !== undefined && overrides.buildCommand !== null) {
@@ -168,10 +223,11 @@ export function resolveBuildSettings(
     buildCommand,
     outputDirectory: normalizeRelative(outputDirectory),
     spa: preset.spa,
-    cleanUrls: preset.cleanUrls,
+    cleanUrls: config.cleanUrls ?? preset.cleanUrls,
     warnings,
     workspaceRoot: workspace?.directory ?? null,
     buildFrom,
+    fromConfig,
   };
 }
 
@@ -218,5 +274,13 @@ export function readSnapshot(dir: string): RepoSnapshot {
   }
   const nextConfigFile = files.find((f) => /^next\.config\.(js|mjs|cjs|ts|mts)$/.test(f));
   const nextConfig = nextConfigFile ? fs.readFileSync(path.join(dir, nextConfigFile), "utf8") : undefined;
-  return { files, packageJson, nextConfig };
+  let vercelJson: unknown;
+  if (files.includes("vercel.json")) {
+    try {
+      vercelJson = JSON.parse(fs.readFileSync(path.join(dir, "vercel.json"), "utf8"));
+    } catch {
+      vercelJson = undefined; // reported by the routing step
+    }
+  }
+  return { files, packageJson, nextConfig, vercelJson };
 }

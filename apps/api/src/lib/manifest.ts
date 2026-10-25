@@ -21,8 +21,11 @@ export interface DeploymentManifest {
 export interface FunctionRoute {
   /** e.g. "/api/hello" or "/api/users/[id]". */
   route: string;
-  /** Bundle path relative to the artifact dir, e.g. "functions/hello.mjs". */
+  /** Bundle path relative to the artifact dir, e.g. "functions/api/hello.mjs". */
   file: string;
+  /** From vercel.json `functions` (capped by the server); otherwise the server defaults apply. */
+  memoryMb?: number;
+  maxDurationMs?: number;
 }
 
 export const MANIFEST_FILE = "orbit.json";

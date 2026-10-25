@@ -42,12 +42,11 @@ function runNodeStyle(handler, request, body, params) {
       body: parsedBody,
     };
     const headers = new Headers();
-    let status = 200;
-    const finish = (payload) => resolve(new Response(payload ?? null, { status, headers }));
+    // Handlers set the status either with res.status(code) or by assigning res.statusCode.
+    const finish = (payload) => resolve(new Response(payload ?? null, { status: res.statusCode, headers }));
     const res = {
       statusCode: 200,
       status(code) {
-        status = code;
         this.statusCode = code;
         return this;
       },
@@ -67,7 +66,7 @@ function runNodeStyle(handler, request, body, params) {
       },
       end: (data) => finish(data),
       redirect(codeOrUrl, maybeUrl) {
-        status = typeof codeOrUrl === "number" ? codeOrUrl : 307;
+        res.statusCode = typeof codeOrUrl === "number" ? codeOrUrl : 307;
         headers.set("location", typeof codeOrUrl === "number" ? maybeUrl : codeOrUrl);
         finish(null);
       },
