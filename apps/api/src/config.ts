@@ -56,6 +56,10 @@ export const config = {
   /** Upper bounds for per-function `memory` / `maxDuration` in vercel.json. */
   functionMaxMemoryMb: int("FUNCTION_MAX_MEMORY_MB", 1024),
   functionMaxDurationSeconds: int("FUNCTION_MAX_DURATION_SECONDS", 60),
+  /** Warm function processes: idle ones kept per function and in total (0 = cold every request), and for how long. */
+  functionWarmPerFunction: int("FUNCTION_WARM_PER_FUNCTION", 1),
+  functionWarmMax: int("FUNCTION_WARM_MAX", 4),
+  functionIdleTimeoutSeconds: int("FUNCTION_IDLE_TIMEOUT_SECONDS", 300),
   /** Edge memory for function responses with `s-maxage` (like Vercel's CDN). 0 turns it off. */
   functionCacheMb: int("FUNCTION_CACHE_MB", 64),
 

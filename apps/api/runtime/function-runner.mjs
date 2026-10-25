@@ -1,6 +1,8 @@
-// Orbit function runner. Runs ONE invocation in a fresh, permission-restricted Node process:
-// read-only access to the function bundle, no child processes, no fs writes, capped heap.
-// Protocol (IPC): parent sends { file, request, params }, we reply with a serialized Response.
+// Orbit function runner: a permission-restricted Node process (read-only access to the function
+// bundle, no child processes, no fs writes, capped heap) that serves invocations of one function.
+// It stays warm between invocations, so module-level state (loaded data, clients) is reused, like
+// a warm Vercel instance. The parent sends one invocation at a time.
+// Protocol (IPC): parent sends { id, file, request, params }, we reply { id, type, response }.
 import { pathToFileURL } from "node:url";
 
 const METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
@@ -75,7 +77,10 @@ function runNodeStyle(handler, request, body, params) {
   });
 }
 
-process.once("message", async ({ file, request, params }) => {
+// The edge went away: nothing will ever call us again.
+process.on("disconnect", () => process.exit(0));
+
+process.on("message", async ({ id, file, request, params }) => {
   try {
     const mod = await import(pathToFileURL(file).href);
     const method = request.method.toUpperCase();
@@ -98,8 +103,9 @@ process.once("message", async ({ file, request, params }) => {
         response = toResponse(await handler(new Request(request.url, init), { params }));
       }
     }
-    process.send({ type: "response", response: await serialize(response) }, () => process.exit(0));
+    process.send({ id, type: "response", response: await serialize(response) });
   } catch (err) {
-    process.send({ type: "error", message: err?.message ?? String(err), stack: err?.stack }, () => process.exit(1));
+    // State may be half-initialized after a throw, so this instance is retired.
+    process.send({ id, type: "error", message: err?.message ?? String(err), stack: err?.stack }, () => process.exit(1));
   }
 });

@@ -36,6 +36,11 @@ const handle = createEdgeHandler({
   functionTimeoutMs: config.functionTimeoutMs,
   functionMemoryMb: config.functionMemoryMb,
   functionCacheBytes: config.functionCacheMb * 1024 * 1024,
+  functionWarm: {
+    maxIdlePerFunction: config.functionWarmPerFunction,
+    maxIdle: config.functionWarmMax,
+    idleTimeoutMs: config.functionIdleTimeoutSeconds * 1000,
+  },
   log: (message) => console.log(message),
 });
 

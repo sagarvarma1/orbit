@@ -144,6 +144,7 @@ describe("edge handler", () => {
       functionTimeoutMs: 1500,
       functionMemoryMb: 64,
       functionCacheBytes: 1024 * 1024,
+      functionWarm: { maxIdlePerFunction: 1, maxIdle: 4, idleTimeoutMs: 60_000 },
     });
     server = http.createServer((req, res) => void handle(req, res));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -273,6 +274,7 @@ describe("edge handler", () => {
     const authed = await request(host, "/api/cached?a=1", { headers: { authorization: "Bearer x" } });
     expect(authed.body).not.toBe(first.body);
     expect(authed.headers["x-orbit-cache"]).toBeUndefined();
+    expect(authed.headers["x-orbit-instance"]).toBe("warm");
     // Plain max-age is for browsers: not cached at the edge.
     const fresh = [await request(host, "/api/fresh"), await request(host, "/api/fresh")];
     expect(fresh[0]!.body).not.toBe(fresh[1]!.body);

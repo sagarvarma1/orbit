@@ -7,7 +7,7 @@ import type { DeploymentStatus } from "../db/repo.js";
 import { FUNCTION_ENV_FILE, MANIFEST_FILE, STATIC_DIR, type DeploymentManifest } from "../lib/manifest.js";
 import { compileRouting, type CompiledRouting } from "../lib/routing.js";
 import { FunctionCache } from "./function-cache.js";
-import { FunctionTimeoutError, invokeFunction, matchFunction } from "./functions.js";
+import { FunctionPool, FunctionTimeoutError, matchFunction } from "./functions.js";
 import { platformPage } from "./pages.js";
 import {
   cacheControl,
@@ -37,6 +37,8 @@ export interface EdgeOptions {
   lookup: TargetLookup;
   functionTimeoutMs: number;
   functionMemoryMb: number;
+  /** Warm function instances; omitted = a fresh process per request. */
+  functionWarm?: { maxIdlePerFunction: number; maxIdle: number; idleTimeoutMs: number };
   /** Memory for cached function responses (`s-maxage`); 0 turns the cache off. */
   functionCacheBytes?: number;
   /** Max request body for functions (Vercel's limit is 4.5 MB). */
@@ -75,6 +77,7 @@ interface LoadedDeployment {
  */
 export function createEdgeHandler(opts: EdgeOptions) {
   const functionCache = opts.functionCacheBytes ? new FunctionCache(opts.functionCacheBytes) : null;
+  const functionPool = new FunctionPool(opts.functionWarm ?? { maxIdlePerFunction: 0, maxIdle: 0, idleTimeoutMs: 0 });
   const deployments = new Map<string, LoadedDeployment>();
   const maxBody = opts.maxBodyBytes ?? 4.5 * 1024 * 1024;
   /** Headers from the deployment's vercel.json, merged into whatever response the request ends with. */
@@ -147,8 +150,9 @@ export function createEdgeHandler(opts: EdgeOptions) {
       if (value !== undefined) headers[key] = Array.isArray(value) ? value.join(", ") : value;
 
     const started = Date.now();
-    const invoke = (method: string) =>
-      invokeFunction({
+    let warm: boolean | null = null;
+    const invoke = async (method: string) => {
+      const result = await functionPool.invoke({
         artifactDir,
         route: match.route,
         params: match.params,
@@ -158,6 +162,9 @@ export function createEdgeHandler(opts: EdgeOptions) {
         memoryMb: match.route.memoryMb ?? opts.functionMemoryMb,
         onLog: (stream, text) => opts.log?.(`[fn ${manifest.deploymentId}${match.route.route}] ${stream}: ${text.trimEnd()}`),
       });
+      warm = result.warm;
+      return result;
+    };
     // GET and HEAD share one entry (HEAD drops the body). Authorized requests are never shared.
     const cacheable = functionCache && (req.method === "GET" || req.method === "HEAD") && !req.headers.authorization;
     try {
@@ -177,6 +184,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
       responseHeaders["x-orbit-duration"] = `${Date.now() - started}ms`;
       if (cacheable) responseHeaders["x-orbit-cache"] = hit ? "HIT" : "MISS";
       if (hit) responseHeaders["age"] = String(age);
+      if (warm !== null) responseHeaders["x-orbit-instance"] = warm ? "warm" : "cold";
       writeHead(res, out.status, responseHeaders);
       res.end(req.method === "HEAD" ? undefined : out.body);
     } catch (err) {

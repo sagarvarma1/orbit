@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bundleFunctions } from "../src/build/functions.js";
-import { invokeFunction } from "../src/edge/functions.js";
+import { FunctionPool, invokeFunction } from "../src/edge/functions.js";
 import { globToRegExp } from "../src/lib/glob.js";
 import type { FunctionRoute } from "../src/lib/manifest.js";
 
@@ -105,5 +105,85 @@ describe("function bundles", () => {
     });
     const res = await invoke(routes[0]!, "https://site.example/api/esm");
     expect(JSON.parse(res.body.toString())).toEqual({ dir: "api" });
+  });
+});
+
+describe("warm function instances", () => {
+  let dir: string;
+  let pool: FunctionPool;
+  const fn = (name: string, source: string) => {
+    fs.mkdirSync(path.join(dir, "functions"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "functions", `${name}.mjs`), source);
+    return { route: `/api/${name}`, file: `functions/${name}.mjs` };
+  };
+  const call = async (route: FunctionRoute, query = "", timeoutMs = 5_000) => {
+    const res = await pool.invoke({
+      artifactDir: dir,
+      route,
+      params: {},
+      request: { method: "GET", url: `https://site.example${route.route}${query}`, headers: {}, body: Buffer.alloc(0) },
+      env: {},
+      timeoutMs,
+      memoryMb: 64,
+    });
+    return { ...(JSON.parse(res.body.toString()) as { n: number; pid: number }), warm: res.warm };
+  };
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 20));
+    return check();
+  };
+  // Module state survives between requests only when the process is reused.
+  const COUNTER = `let n = 0;
+    export async function GET(req) {
+      const q = new URL(req.url).searchParams;
+      if (q.has("boom")) throw new Error("boom");
+      if (q.has("sleep")) await new Promise((r) => setTimeout(r, Number(q.get("sleep"))));
+      return Response.json({ n: ++n, pid: process.pid });
+    }`;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-warm-"));
+    pool = new FunctionPool({ maxIdlePerFunction: 1, maxIdle: 4, idleTimeoutMs: 60_000 });
+  });
+  afterEach(() => {
+    pool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reuses a process, so setup runs once", async () => {
+    const route = fn("counter", COUNTER);
+    const first = await call(route);
+    const second = await call(route);
+    expect(first).toMatchObject({ n: 1, warm: false });
+    expect(second).toMatchObject({ n: 2, warm: true, pid: first.pid });
+  });
+
+  it("starts more instances for concurrent requests and keeps only the idle limit", async () => {
+    const route = fn("counter", COUNTER);
+    const [a, b] = await Promise.all([call(route, "?sleep=200"), call(route, "?sleep=200")]);
+    expect(a.pid).not.toBe(b.pid);
+    expect(await until(() => pool.size === 1)).toBe(true);
+    expect(await call(route)).toMatchObject({ n: 2, warm: true });
+  });
+
+  it("retires an instance after a crash or timeout", async () => {
+    const route = fn("counter", COUNTER);
+    await call(route);
+    await expect(call(route, "?boom")).rejects.toThrow("boom");
+    expect(await call(route)).toMatchObject({ n: 1, warm: false });
+    await expect(call(route, "?sleep=5000", 200)).rejects.toThrow(/timed out/);
+    expect(await call(route)).toMatchObject({ n: 1, warm: false });
+  });
+
+  it("stops idle instances after the timeout and beyond the global limit", async () => {
+    pool.close();
+    pool = new FunctionPool({ maxIdlePerFunction: 1, maxIdle: 1, idleTimeoutMs: 300 });
+    const one = fn("one", COUNTER);
+    const two = fn("two", COUNTER);
+    await call(one);
+    await call(two);
+    expect(await until(() => pool.size === 1)).toBe(true);
+    expect(await call(one)).toMatchObject({ warm: false }); // evicted as the oldest idle instance
+    expect(await until(() => pool.size === 0)).toBe(true);
   });
 });
