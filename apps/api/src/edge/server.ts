@@ -1,14 +1,22 @@
 import fs from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "node:http";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import type { DeploymentStatus } from "../db/repo.js";
-import { FUNCTION_ENV_FILE, MANIFEST_FILE, STATIC_DIR, type DeploymentManifest } from "../lib/manifest.js";
+import {
+  FUNCTION_ENV_FILE,
+  MANIFEST_FILE,
+  RUNTIME_DIR,
+  SERVER_DIR,
+  STATIC_DIR,
+  type DeploymentManifest,
+} from "../lib/manifest.js";
 import { compileRouting, type CompiledRouting } from "../lib/routing.js";
 import { FunctionCache } from "./function-cache.js";
 import { FunctionPool, FunctionTimeoutError, matchFunction } from "./functions.js";
 import { platformPage } from "./pages.js";
+import { ServerPool, type ServerPoolOptions } from "./servers.js";
 import {
   cacheControl,
   contentType,
@@ -39,6 +47,10 @@ export interface EdgeOptions {
   functionMemoryMb: number;
   /** Warm function instances; omitted = a fresh process per request. */
   functionWarm?: { maxIdlePerFunction: number; maxIdle: number; idleTimeoutMs: number };
+  /** Next.js servers (SSR deployments). */
+  servers?: Omit<ServerPoolOptions, "log">;
+  /** Writable per-deployment state; defaults to <artifactsDir>/../runtime, matching the build. */
+  runtimeDir?: string;
   /** Memory for cached function responses (`s-maxage`); 0 turns the cache off. */
   functionCacheBytes?: number;
   /** Max request body for functions (Vercel's limit is 4.5 MB). */
@@ -78,6 +90,11 @@ interface LoadedDeployment {
 export function createEdgeHandler(opts: EdgeOptions) {
   const functionCache = opts.functionCacheBytes ? new FunctionCache(opts.functionCacheBytes) : null;
   const functionPool = new FunctionPool(opts.functionWarm ?? { maxIdlePerFunction: 0, maxIdle: 0, idleTimeoutMs: 0 });
+  const serverPool = new ServerPool({
+    ...(opts.servers ?? { maxServers: 3, idleTimeoutMs: 10 * 60_000, memoryMb: 512 }),
+    log: opts.log,
+  });
+  const runtimeDir = opts.runtimeDir ?? path.join(path.dirname(opts.artifactsDir), RUNTIME_DIR);
   const deployments = new Map<string, LoadedDeployment>();
   const maxBody = opts.maxBodyBytes ?? 4.5 * 1024 * 1024;
   /** Headers from the deployment's vercel.json, merged into whatever response the request ends with. */
@@ -97,7 +114,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
     }
   }
 
-  function writeHead(res: ServerResponse, status: number, headers: Record<string, string | number>): void {
+  function writeHead(res: ServerResponse, status: number, headers: OutgoingHttpHeaders): void {
     res.writeHead(status, { ...headers, ...customHeaders.get(res) });
   }
 
@@ -139,12 +156,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
     }
 
     const artifactDir = path.join(opts.artifactsDir, manifest.deploymentId);
-    let env: Record<string, string> = {};
-    try {
-      env = JSON.parse(fs.readFileSync(path.join(artifactDir, FUNCTION_ENV_FILE), "utf8")) as Record<string, string>;
-    } catch {
-      /* no env snapshot */
-    }
+    const env = readEnv(artifactDir);
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers))
       if (value !== undefined) headers[key] = Array.isArray(value) ? value.join(", ") : value;
@@ -205,6 +217,75 @@ export function createEdgeHandler(opts: EdgeOptions) {
     return true;
   }
 
+  /** Env vars snapshotted at build time for this deployment's functions and server. */
+  function readEnv(artifactDir: string): Record<string, string> {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(artifactDir, FUNCTION_ENV_FILE), "utf8")) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Forwards the request to the deployment's own app server (started on demand) and streams the
+   * response back, so streaming SSR and React Server Components arrive as they render.
+   */
+  async function proxyToServer(req: IncomingMessage, res: ServerResponse, manifest: DeploymentManifest, url: URL) {
+    const id = manifest.deploymentId;
+    const artifactDir = path.join(opts.artifactsDir, id);
+    const started = Date.now();
+    try {
+      await serverPool.use(
+        {
+          deploymentId: id,
+          entry: path.join(artifactDir, manifest.server!.entry),
+          root: path.join(artifactDir, SERVER_DIR),
+          runtimeDir: path.join(runtimeDir, id),
+          env: readEnv(artifactDir),
+        },
+        (port, cold) =>
+          new Promise<void>((resolve, reject) => {
+            const headers: OutgoingHttpHeaders = { ...req.headers };
+            headers["x-forwarded-host"] ??= req.headers.host;
+            headers["x-forwarded-proto"] ??= "http";
+            headers["x-forwarded-for"] ??= req.socket.remoteAddress;
+            const upstream = http.request(
+              { host: "127.0.0.1", port, method: req.method, path: url.pathname + url.search, headers },
+              (response) => {
+                writeHead(res, response.statusCode ?? 502, {
+                  ...response.headers,
+                  "x-orbit-deployment": id,
+                  "x-orbit-instance": cold ? "cold" : "warm",
+                  "x-orbit-duration": `${Date.now() - started}ms`,
+                });
+                response.pipe(res);
+                response.on("error", reject);
+                res.on("close", () => resolve());
+              },
+            );
+            upstream.on("error", reject);
+            // No bytes for this long means the app is stuck (streaming responses keep sending).
+            upstream.setTimeout(opts.functionTimeoutMs * 6, () =>
+              upstream.destroy(new Error("The server took too long to respond")),
+            );
+            res.on("close", () => {
+              if (!res.writableFinished) upstream.destroy();
+            });
+            req.pipe(upstream);
+          }),
+      );
+    } catch (err) {
+      opts.log?.(`[server ${id}] ${(err as Error).message}`);
+      if (res.headersSent) return void res.destroy();
+      sendPage(res, req.method ?? "GET", {
+        status: 502,
+        code: "SERVER_ERROR",
+        title: "This deployment's server failed to respond",
+        detail: (err as Error).message.split("\n")[0],
+      });
+    }
+  }
+
   async function serveFile(
     req: IncomingMessage,
     res: ServerResponse,
@@ -245,7 +326,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
     }
   }
 
-  return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? "GET";
     res.setHeader("server", "orbit-edge");
     const label = labelFromHost(req.headers.host, opts.rootDomain);
@@ -327,6 +408,15 @@ export function createEdgeHandler(opts: EdgeOptions) {
     const methodNotAllowed = () =>
       sendPage(res, method, { status: 405, code: "METHOD_NOT_ALLOWED", title: "Method not allowed" }, { allow: "GET, HEAD" });
 
+    // Server-rendered apps: built assets and public/ files come straight from disk, the app renders the rest.
+    if (manifest.server) {
+      if (readOnly) {
+        const onDisk = resolve(urlPath, false);
+        if (onDisk.kind === "file") return respond(onDisk);
+      }
+      return proxyToServer(req, res, manifest, url);
+    }
+
     if (routing) {
       if (readOnly) {
         const onDisk = resolve(urlPath, false);
@@ -342,5 +432,12 @@ export function createEdgeHandler(opts: EdgeOptions) {
 
     if (!readOnly) return methodNotAllowed();
     return respond(resolve(urlPath));
+  }
+
+  /** Stops function processes and app servers (on shutdown). */
+  const close = () => {
+    functionPool.close();
+    serverPool.close();
   };
+  return Object.assign(handle, { close });
 }

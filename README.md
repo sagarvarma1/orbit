@@ -34,8 +34,12 @@ build in an isolated container, and real files served by a Host-routing edge wit
 
 **Builds**
 
-- **Framework detection** for Next.js (static export), Vite, Create React App, Astro, any `build` script, or plain
-  static HTML, with overridable install/build commands and output directory.
+- **Framework detection** for Next.js, Vite, Create React App, Astro, any `build` script, or plain static HTML,
+  with overridable install/build commands and output directory. `vercel.json` build settings are honored.
+- **Next.js with server rendering**: apps without `output: 'export'` are built as a standalone server (no config
+  changes needed). Each deployment gets its own server, started on the first request, kept warm and stopped when
+  idle, sandboxed like functions. The edge serves `/_next/static` and `public/` from disk and streams everything else
+  from the server, so SSR, route handlers and server actions work, and rollbacks still switch instantly.
 - **Monorepos**: set a root directory (`apps/web`) and Orbit installs from the workspace root (npm, pnpm or yarn
   workspaces) and builds the app. Turborepo is detected and used to build internal dependencies first.
 - **Isolated builds**: each step runs in a throwaway `node:22` container with CPU, memory and PID limits. On a
@@ -173,6 +177,8 @@ The GitHub App flow works locally too; its webhook is simply left inactive.
 | `FUNCTION_CACHE_MB`                                        | `64`                    | Edge cache for function responses with `s-maxage` (`0` = off)                        |
 | `FUNCTION_WARM_PER_FUNCTION` / `FUNCTION_WARM_MAX`         | `1` / `4`               | Idle function processes kept warm per function / in total (`0` = cold every request) |
 | `FUNCTION_IDLE_TIMEOUT_SECONDS`                            | `300`                   | Stop a warm function process after this long without requests                        |
+| `SERVER_MAX` / `SERVER_MEMORY_MB`                          | `3` / `512`             | Next.js servers running at once / heap per server                                    |
+| `SERVER_IDLE_TIMEOUT_SECONDS`                              | `600`                   | Stop a deployment's Next.js server after this long without requests                  |
 | `GIT_POLL_INTERVAL_SECONDS`                                | `0`                     | Poll branch heads (0 = off)                                                          |
 | `GITHUB_WEBHOOK_SECRET`                                    | (empty)                 | For a manually added repository webhook (the GitHub App has its own secret)          |
 | `GITHUB_TOKEN`                                             | (empty)                 | Personal access token fallback for commit statuses and PR comments                   |
@@ -186,7 +192,7 @@ The GitHub App flow works locally too; its webhook is simply left inactive.
 ```bash
 pnpm test        # unit tests: auth, domains, GitHub App, detection (incl. monorepos), edge, routing, cache, queue, webhooks
 pnpm e2e         # boots a real control plane + edge and deploys real repos end to end
-pnpm e2e --next  # also builds a Next.js static-export app
+pnpm e2e --next  # also builds Next.js apps: a static export, and server rendering with redeploy and rollback
 ```
 
 The e2e suite (68 checks) signs in, issues an API token, and deploys `mdn/beginner-html-site-styled` and a Vite app
@@ -230,19 +236,18 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 ## Limitations
 
-- Static output and functions only. Next.js needs `output: 'export'`; no SSR, ISR, middleware or image optimization
-  yet (server rendering is next on the roadmap).
+- Next.js server rendering works per deployment, but ISR revalidation, middleware at the edge and `next/image`
+  optimization (needs `sharp`) aren't wired up yet. Other SSR frameworks (Remix, SvelteKit, Nuxt) aren't detected.
 - One server, one admin account. No teams or roles yet.
 - `vercel.json` covers `redirects`, `rewrites` (internal paths only) and `headers`, without `has`/`missing`.
 - The build cache is skipped for monorepos and custom install commands, where skipping install isn't safe.
-- Functions start a fresh process per request (~50–100 ms). A real platform keeps warm sandboxes.
+- Function and app-server sandboxes use Node's permission model, not VMs. A first request after idle is a cold start.
 - Each deployment hostname gets its own certificate on first visit. Let's Encrypt allows 50 certificates per domain
   per week; heavy preview use should switch to a wildcard certificate ([docs/self-hosting.md](docs/self-hosting.md)).
 
 ## Roadmap
 
-- Next.js and other frameworks with server rendering (per-deployment containers that sleep when idle)
-- Warm function pool and streaming responses
+- ISR, middleware and image optimization for Next.js; more SSR frameworks
 - Runtime logs and basic analytics
 - Teams and roles
 - `orbit` CLI (`orbit deploy` from any folder)

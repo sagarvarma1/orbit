@@ -10,6 +10,7 @@ import {
   resolveBuildSettings,
   type RepoSnapshot,
 } from "../src/build/detect.js";
+import { findServerEntry } from "../src/build/pipeline.js";
 
 const snap = (packageJson: RepoSnapshot["packageJson"], files: string[] = [], nextConfig?: string): RepoSnapshot => ({
   packageJson,
@@ -31,19 +32,24 @@ describe("framework detection", () => {
     });
   });
 
-  it("detects Next.js and warns when static export is not configured", () => {
-    const withoutExport = resolveBuildSettings(
-      snap({ scripts: { build: "next build" }, dependencies: { next: "16" } }, [], "export default {}"),
-    );
-    expect(withoutExport.framework).toBe("nextjs");
-    expect(withoutExport.outputDirectory).toBe("out");
-    expect(withoutExport.warnings.join()).toMatch(/output: 'export'/);
+  it("runs Next.js as a server unless it exports statically", () => {
+    const pkg = { scripts: { build: "next build" }, dependencies: { next: "16" } };
+    expect(resolveBuildSettings(snap(pkg, [], "export default {}"))).toMatchObject({
+      framework: "nextjs",
+      server: true,
+      outputDirectory: ".next",
+      cleanUrls: false,
+      warnings: [],
+    });
+    expect(resolveBuildSettings(snap(pkg))).toMatchObject({ server: true }); // no next.config at all
 
-    const withExport = resolveBuildSettings(
-      snap({ scripts: { build: "next build" }, dependencies: { next: "16" } }, [], "module.exports = { output: 'export' }"),
-    );
-    expect(withExport.warnings).toHaveLength(0);
-    expect(withExport.cleanUrls).toBe(true);
+    const withExport = resolveBuildSettings(snap(pkg, [], "module.exports = { output: 'export' }"));
+    expect(withExport).toMatchObject({ server: false, outputDirectory: "out", cleanUrls: true, warnings: [] });
+    // Choosing an output directory means "serve these files".
+    expect(resolveBuildSettings(snap(pkg), { outputDirectory: "build" })).toMatchObject({
+      server: false,
+      outputDirectory: "build",
+    });
   });
 
   it("detects Create React App (build/, SPA)", () => {
@@ -233,5 +239,24 @@ describe("monorepos", () => {
       buildCommand: "npm run build:static",
       buildFrom: "project",
     });
+  });
+});
+
+describe("Next.js standalone output", () => {
+  it("finds server.js at the root or mirrored under the app's monorepo path", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-standalone-"));
+    const touch = (rel: string) => {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), "");
+    };
+    touch("node_modules/next/server.js"); // must not be picked
+    touch("apps/web/server.js");
+    touch("apps/web/.next/BUILD_ID");
+    expect(findServerEntry(dir)).toBe("apps/web/server.js");
+    touch("server.js");
+    touch(".next/BUILD_ID");
+    expect(findServerEntry(dir)).toBe("server.js");
+    fs.rmSync(dir, { recursive: true, force: true });
+    expect(findServerEntry(fs.mkdtempSync(path.join(os.tmpdir(), "orbit-standalone-")))).toBeNull();
   });
 });

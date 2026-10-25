@@ -47,7 +47,8 @@ export interface FrameworkPreset {
 }
 
 export const PRESETS: Record<FrameworkId, FrameworkPreset> = {
-  nextjs: { id: "nextjs", name: "Next.js (static export)", outputDirectory: "out", spa: false, cleanUrls: true },
+  // Static export by default; apps without `output: 'export'` run as a server (see BuildSettings.server).
+  nextjs: { id: "nextjs", name: "Next.js", outputDirectory: "out", spa: false, cleanUrls: true },
   astro: { id: "astro", name: "Astro", outputDirectory: "dist", spa: false, cleanUrls: true },
   "create-react-app": { id: "create-react-app", name: "Create React App", outputDirectory: "build", spa: true, cleanUrls: false },
   vite: { id: "vite", name: "Vite", outputDirectory: "dist", spa: true, cleanUrls: false },
@@ -72,6 +73,8 @@ export interface BuildSettings {
   buildFrom: "project" | "workspace";
   /** Settings taken from vercel.json, for the build log. */
   fromConfig: string[];
+  /** Next.js with server rendering: the build produces a standalone server instead of static files. */
+  server: boolean;
 }
 
 export interface BuildOverrides {
@@ -185,12 +188,9 @@ export function resolveBuildSettings(
 
   if (framework === "static" && !files.has("index.html") && files.has("public")) outputDirectory = "public";
 
-  if (framework === "nextjs") {
-    const exportsStatically = snapshot.nextConfig && /output\s*:\s*["'`]export["'`]/.test(snapshot.nextConfig);
-    if (!exportsStatically) {
-      warnings.push("Next.js: Orbit serves static output. Set `output: 'export'` in next.config to produce `out/`.");
-    }
-  }
+  // Without `output: 'export'`, a Next.js app needs a server (SSR, route handlers, server actions).
+  const exportsStatically = Boolean(snapshot.nextConfig && /output\s*:\s*["'`]export["'`]/.test(snapshot.nextConfig));
+  let server = framework === "nextjs" && !exportsStatically;
 
   // An empty string in vercel.json means "skip this step", like in the dashboard.
   if (config.installCommand !== undefined && overrides.installCommand == null) {
@@ -215,6 +215,9 @@ export function resolveBuildSettings(
     buildFrom = "project";
   }
   if (overrides.outputDirectory) outputDirectory = overrides.outputDirectory;
+  // An explicit output directory means the user wants static files served from it.
+  if (overrides.outputDirectory || config.outputDirectory) server = false;
+  if (server) outputDirectory = ".next";
 
   return {
     framework,
@@ -224,11 +227,12 @@ export function resolveBuildSettings(
     buildCommand,
     outputDirectory: normalizeRelative(outputDirectory),
     spa: preset.spa,
-    cleanUrls: config.cleanUrls ?? preset.cleanUrls,
+    cleanUrls: server ? false : (config.cleanUrls ?? preset.cleanUrls),
     warnings,
     workspaceRoot: workspace?.directory ?? null,
     buildFrom,
     fromConfig,
+    server,
   };
 }
 

@@ -116,11 +116,11 @@ that connects mid-build (or after) sees the full log.
   edge.
 - **Edge reads the DB directly** instead of receiving pushed config. Simple and consistent;
   a production edge would cache alias config in memory and receive invalidations.
-- **Static output only** (plus functions). Next.js must use `output: 'export'`. SSR,
-  ISR and middleware would need a long-running server runtime per deployment.
-- **Child process per function invocation** — strong isolation and simple, ~50ms cold
-  start every time. A real system would keep warm, sandboxed workers (Firecracker, V8
-  isolates).
+- **Next.js SSR as one standalone server per deployment**, started on demand and stopped
+  when idle. Keeps deployments immutable (rollback = pointer switch) at the cost of a cold
+  start after idle. ISR revalidation and edge middleware aren't wired up.
+- **Warm processes for functions** under Node's permission model, not VMs. A real system
+  would use Firecracker or V8 isolates for stronger isolation and faster cold starts.
 - **Child-process builds are not a security boundary.** Docker mode is the isolated mode;
   the fallback exists so it runs anywhere (including this sandbox).
 - **Single admin account.** Sign-in with sessions and API tokens; teams and roles come later.
@@ -130,7 +130,7 @@ that connects mid-build (or after) sees the full log.
 ## Out of scope (for now)
 
 - Teams, billing, quotas.
-- SSR / ISR / edge middleware / image optimization (next on the roadmap).
+- ISR / edge middleware / image optimization (next on the roadmap).
 - Multi-region edge, CDN caching, analytics.
 
 ## Feature checklist (status as delivered)

@@ -2,7 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Config } from "../config.js";
 import type { CacheStatus, Deployment, Project } from "../db/repo.js";
-import { FUNCTION_ENV_FILE, FUNCTIONS_DIR, MANIFEST_FILE, STATIC_DIR, type DeploymentManifest } from "../lib/manifest.js";
+import {
+  FUNCTION_ENV_FILE,
+  FUNCTIONS_DIR,
+  MANIFEST_FILE,
+  RUNTIME_DIR,
+  SERVER_DIR,
+  STATIC_DIR,
+  type DeploymentManifest,
+} from "../lib/manifest.js";
 import { hasRoutingRules, parseRoutingConfig, ROUTING_CONFIG_FILE, type RoutingConfig } from "../lib/routing.js";
 import { type BuildSettings, findWorkspaceRoot, normalizeRelative, readSnapshot, resolveBuildSettings } from "./detect.js";
 import { BuildCache, computeCacheKey } from "./cache.js";
@@ -68,6 +76,72 @@ function copyOutput(from: string, to: string, isRepoRoot: boolean): { fileCount:
     },
   });
   return { fileCount, totalBytes };
+}
+
+/** Total size of the regular files under a directory (symlinks not followed). */
+function dirStats(dir: string): { fileCount: number; totalBytes: number } {
+  let fileCount = 0;
+  let totalBytes = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile()) continue;
+    fileCount += 1;
+    totalBytes += fs.statSync(path.join(entry.parentPath, entry.name)).size;
+  }
+  return { fileCount, totalBytes };
+}
+
+/**
+ * The standalone server's entry, relative to `.next/standalone`. In a monorepo Next.js mirrors the
+ * repository layout there (e.g. "apps/web/server.js"), so look for the server.js next to a `.next`.
+ */
+export function findServerEntry(standaloneDir: string): string | null {
+  const queue = [""];
+  while (queue.length) {
+    const rel = queue.shift()!;
+    const dir = path.join(standaloneDir, rel);
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    if (entries.some((e) => e.name === "server.js" && e.isFile()) && entries.some((e) => e.name === ".next")) {
+      return path.posix.join(rel.split(path.sep).join("/"), "server.js");
+    }
+    for (const e of entries)
+      if (e.isDirectory() && e.name !== "node_modules" && e.name !== ".next") queue.push(path.join(rel, e.name));
+  }
+  return null;
+}
+
+/**
+ * Packages a Next.js standalone build: the server (with its traced node_modules) goes to server/,
+ * `.next/static` and `public/` go to static/ so the edge serves them without touching the server.
+ * The server's `.next/cache` becomes a link to a writable per-deployment directory outside the
+ * artifact, so the artifact itself never changes.
+ */
+function collectNextServer(projectDir: string, stagingDir: string, runtimeDir: string, artifactDir: string) {
+  const standalone = path.join(projectDir, ".next", "standalone");
+  if (!fs.existsSync(standalone)) {
+    throw new BuildError(
+      "Next.js didn't produce a standalone server (.next/standalone). If next.config sets `output`, remove it or set it to 'standalone'.",
+    );
+  }
+  const entry = findServerEntry(standalone);
+  if (!entry) throw new BuildError("Couldn't find server.js in the Next.js standalone output");
+
+  const serverDir = path.join(stagingDir, SERVER_DIR);
+  fs.cpSync(standalone, serverDir, { recursive: true, verbatimSymlinks: true });
+  const appNextDir = path.join(serverDir, path.posix.dirname(entry), ".next");
+  const cacheLink = path.join(appNextDir, "cache");
+  fs.rmSync(cacheLink, { recursive: true, force: true });
+  // Relative to where the artifact ends up after the staging dir is renamed.
+  const finalNextDir = path.join(artifactDir, SERVER_DIR, path.posix.dirname(entry), ".next");
+  fs.symlinkSync(path.relative(finalNextDir, path.join(runtimeDir, "cache")), cacheLink);
+
+  const staticDir = path.join(stagingDir, STATIC_DIR);
+  fs.mkdirSync(staticDir, { recursive: true });
+  const publicDir = path.join(projectDir, "public");
+  if (fs.existsSync(publicDir)) copyOutput(publicDir, staticDir, false);
+  const nextStatic = path.join(projectDir, ".next", "static");
+  if (fs.existsSync(nextStatic)) fs.cpSync(nextStatic, path.join(staticDir, "_next", "static"), { recursive: true });
+
+  return { stats: dirStats(staticDir), server: { entry: path.posix.join(SERVER_DIR, entry) } };
 }
 
 /** Routing rules from vercel.json, validated now so a typo fails the build instead of a request. */
@@ -151,6 +225,7 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       );
     }
     if (settings.fromConfig.length) log.system(`Build settings from vercel.json: ${settings.fromConfig.join(", ")}`);
+    if (settings.server) log.system("Next.js: server rendering (standalone server, static assets from the edge)");
     for (const warning of settings.warnings) log.system(`Warning: ${warning}`);
     const routing = readRoutingConfig(projectDir);
     if (hasRoutingRules(routing)) {
@@ -168,6 +243,8 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       ORBIT_GIT_COMMIT_REF: deployment.branch,
       ORBIT_GIT_COMMIT_SHA: commit.sha,
       ORBIT_GIT_COMMIT_MESSAGE: commit.message,
+      // Next.js reads this as the default for `output`, so apps build a standalone server without config changes.
+      ...(settings.server ? { NEXT_PRIVATE_STANDALONE: "1", NEXT_TELEMETRY_DISABLED: "1" } : {}),
       ...ctx.env,
     };
     const userKeys = Object.keys(ctx.env);
@@ -260,14 +337,29 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
     }
 
     // 5. Collect output -------------------------------------------------------
-    const outputDir = path.join(projectDir, settings.outputDirectory);
-    if (!fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
-      const hint = settings.framework === "nextjs" ? " Did you set `output: 'export'` in next.config?" : "";
-      throw new BuildError(`Output directory "${settings.outputDirectory}" was not found after the build.${hint}`);
+    let stats: { fileCount: number; totalBytes: number };
+    let server: DeploymentManifest["server"];
+    if (settings.server) {
+      ({ stats, server } = collectNextServer(
+        projectDir,
+        stagingDir,
+        path.join(config.dataDir, RUNTIME_DIR, deployment.id),
+        artifactDir,
+      ));
+      log.system(
+        `Collected Next.js server ${server.entry} and ${stats.fileCount} static assets (${formatBytes(stats.totalBytes)})`,
+      );
+    } else {
+      const outputDir = path.join(projectDir, settings.outputDirectory);
+      if (!fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
+        throw new BuildError(`Output directory "${settings.outputDirectory}" was not found after the build.`);
+      }
+      stats = copyOutput(outputDir, path.join(stagingDir, STATIC_DIR), path.resolve(outputDir) === path.resolve(projectDir));
+      if (stats.fileCount === 0) throw new BuildError(`Output directory "${settings.outputDirectory}" is empty`);
+      log.system(
+        `Collected ${stats.fileCount} static files (${formatBytes(stats.totalBytes)}) from "${settings.outputDirectory}"`,
+      );
     }
-    const stats = copyOutput(outputDir, path.join(stagingDir, STATIC_DIR), path.resolve(outputDir) === path.resolve(projectDir));
-    if (stats.fileCount === 0) throw new BuildError(`Output directory "${settings.outputDirectory}" is empty`);
-    log.system(`Collected ${stats.fileCount} static files (${formatBytes(stats.totalBytes)}) from "${settings.outputDirectory}"`);
 
     // 6. Functions --------------------------------------------------------------
     throwIfAborted(signal);
@@ -281,7 +373,7 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       throw new BuildError(`Bundling functions failed: ${err.message}`);
     });
     const functions = bundled.routes;
-    if (functions.length) {
+    if (functions.length || server) {
       // Like Vercel, a deployment's functions see the env as of build time, so the artifact stays immutable.
       const { CI: _ci, ...runtimeEnv } = buildEnv;
       fs.writeFileSync(path.join(stagingDir, FUNCTION_ENV_FILE), JSON.stringify(runtimeEnv), { mode: 0o600 });
@@ -298,6 +390,7 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       spa: settings.spa,
       cleanUrls: settings.cleanUrls,
       functions,
+      ...(server ? { server } : {}),
       ...(hasRoutingRules(routing) ? { routing } : {}),
       fileCount: stats.fileCount,
       totalBytes: stats.totalBytes,

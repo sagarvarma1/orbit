@@ -19,7 +19,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm format:check
-      - name: End-to-end (real builds, child-process builder)
-        run: ORBIT_BUILDER=process node scripts/e2e.mjs
+      - name: End-to-end (real builds incl. Next.js SSR, child-process builder)
+        run: ORBIT_BUILDER=process node scripts/e2e.mjs --next
       - name: Dashboard production build
         run: pnpm --filter @orbit/dashboard build

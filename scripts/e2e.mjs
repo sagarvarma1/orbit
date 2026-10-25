@@ -521,6 +521,80 @@ async function main() {
     check("Next.js deployment ready", nd.status === "ready" && nd.framework === "nextjs", nd.errorMessage ?? "");
     check("clean URL /about serves about.html", (await edge(nd.id, "/about")).body.includes("About page"));
     check("Next.js 404.html used for unknown routes", (await edge(nd.id, "/missing")).status === 404);
+
+    console.log("\nLocal repo: Next.js with server rendering");
+    const page = (version) =>
+      'import { headers } from "next/headers";\nexport const dynamic = "force-dynamic";\n' +
+      "export default async function Home() {\n" +
+      "  const host = (await headers()).get('host');\n" +
+      `  return <main><h1>SSR ${version}</h1><p id="t">{Date.now()}</p><p id="host">{host}</p><p id="env">{process.env.GREETING}</p></main>;\n}`;
+    const ssrRepo = makeRepo("next-ssr", {
+      "package.json": JSON.stringify({
+        name: "next-ssr",
+        private: true,
+        scripts: { build: "next build" },
+        dependencies: { next: "^16", react: "^19", "react-dom": "^19" },
+      }),
+      "app/layout.js": 'export default function Layout({ children }) { return <html lang="en"><body>{children}</body></html>; }',
+      "app/page.js": page("v1"),
+      "app/static/page.js": "export default function Static() { return <h1>Prerendered page</h1>; }",
+      "app/api/time/route.js":
+        'export const dynamic = "force-dynamic";\nexport function GET(req) { return Response.json({ now: Date.now(), path: new URL(req.url).pathname }); }',
+      "public/hello.txt": "hello from public",
+    });
+    const ssr = await api("POST", "/api/projects", {
+      repoUrl: `file://${ssrRepo}`,
+      name: "next-ssr",
+      env: [{ key: "GREETING", value: "hi from runtime env", targets: ["production", "preview"] }],
+    });
+    const sd1 = await waitFor(ssr.deployment.id);
+    check("SSR deployment ready", sd1.status === "ready" && sd1.framework === "nextjs", sd1.errorMessage ?? "");
+    const ssrLogs = (await api("GET", `/api/deployments/${sd1.id}/logs`)).lines.map((l) => l.text);
+    check(
+      "build log says server rendering",
+      ssrLogs.some((t) => t.includes("Next.js: server rendering")),
+    );
+    const r1 = await edge("next-ssr");
+    const r2 = await edge("next-ssr");
+    const stamp = (r) => /<p id="t">(\d+)/.exec(r.body)?.[1];
+    check("page rendered by the server", r1.status === 200 && r1.body.includes("SSR v1"), r1.body.slice(0, 200));
+    check(
+      "first request starts the server, the next one reuses it",
+      r1.headers["x-orbit-instance"] === "cold" && r2.headers["x-orbit-instance"] === "warm",
+    );
+    check("rendered fresh on every request", stamp(r1) && stamp(r2) && stamp(r1) !== stamp(r2));
+    check("server sees the request's host", r1.body.includes(`next-ssr.localhost:${EDGE_PORT}`));
+    check("server sees deployment env vars", r1.body.includes("hi from runtime env"));
+    check("prerendered page served", (await edge("next-ssr", "/static")).body.includes("Prerendered page"));
+    const time = await edge("next-ssr", "/api/time");
+    check("route handler runs", time.status === 200 && JSON.parse(time.body || "{}").path === "/api/time", time.body);
+    const pub = await edge("next-ssr", "/hello.txt");
+    check("public/ files served by the edge", pub.body.trim() === "hello from public" && !pub.headers["x-orbit-instance"]);
+    const asset = /\/_next\/static\/[^"]+\.js/.exec(r1.body)?.[0];
+    const assetRes = asset ? await edge("next-ssr", asset) : null;
+    check(
+      "_next/static assets served by the edge, immutable",
+      assetRes?.status === 200 && assetRes.headers["cache-control"] === "public, max-age=31536000, immutable",
+      asset ?? "no asset",
+    );
+    check("unknown routes get the app's 404", (await edge("next-ssr", "/nope")).status === 404);
+
+    fs.writeFileSync(path.join(ssrRepo, "app/page.js"), page("v2"));
+    git(ssrRepo, "commit", "-qam", "SSR v2");
+    const ssrHook = await (
+      await signedWebhook({
+        ref: "refs/heads/main",
+        after: git(ssrRepo, "rev-parse", "HEAD"),
+        repository: { clone_url: `file://${ssrRepo}` },
+        head_commit: { message: "SSR v2", author: { name: "Orbit E2E" } },
+      })
+    ).json();
+    const sd2 = await waitFor(ssrHook.deployments[0].id);
+    check("second SSR deployment ready", sd2.status === "ready", sd2.errorMessage ?? "");
+    check("production now renders v2", (await edge("next-ssr")).body.includes("SSR v2"));
+    check("the old deployment still renders v1 (immutable)", (await edge(sd1.id)).body.includes("SSR v1"));
+    await api("POST", "/api/projects/next-ssr/rollback", {});
+    check("rollback switches production back to v1", (await edge("next-ssr")).body.includes("SSR v1"));
   }
 
   console.log("\nMonorepo (npm workspaces)");

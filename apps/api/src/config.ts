@@ -60,6 +60,10 @@ export const config = {
   functionWarmPerFunction: int("FUNCTION_WARM_PER_FUNCTION", 1),
   functionWarmMax: int("FUNCTION_WARM_MAX", 4),
   functionIdleTimeoutSeconds: int("FUNCTION_IDLE_TIMEOUT_SECONDS", 300),
+  /** Next.js servers for SSR deployments: how many run at once, their heap, and when an idle one stops. */
+  serverMax: int("SERVER_MAX", 3),
+  serverMemoryMb: int("SERVER_MEMORY_MB", 512),
+  serverIdleTimeoutSeconds: int("SERVER_IDLE_TIMEOUT_SECONDS", 600),
   /** Edge memory for function responses with `s-maxage` (like Vercel's CDN). 0 turns it off. */
   functionCacheMb: int("FUNCTION_CACHE_MB", 64),
 

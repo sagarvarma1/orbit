@@ -36,6 +36,11 @@ const handle = createEdgeHandler({
   functionTimeoutMs: config.functionTimeoutMs,
   functionMemoryMb: config.functionMemoryMb,
   functionCacheBytes: config.functionCacheMb * 1024 * 1024,
+  servers: {
+    maxServers: config.serverMax,
+    memoryMb: config.serverMemoryMb,
+    idleTimeoutMs: config.serverIdleTimeoutSeconds * 1000,
+  },
   functionWarm: {
     maxIdlePerFunction: config.functionWarmPerFunction,
     maxIdle: config.functionWarmMax,
@@ -63,4 +68,6 @@ server.listen(config.edgePort, config.host, () => {
   console.log(`Orbit edge on :${config.edgePort} · serving *.${config.rootDomain} · artifacts: ${config.artifactsDir}`);
 });
 
+// App servers and function processes are children of the edge; don't leave them running.
+process.on("exit", () => handle.close());
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => server.close(() => process.exit(0)));
