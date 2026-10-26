@@ -38,6 +38,8 @@ export interface TargetLookup {
   resolve(label: string): ResolvedTarget | null;
   /** Custom domains (anything not under the root domain). */
   resolveDomain?(hostname: string): ResolvedTarget | null;
+  /** Whether a hostname is a custom domain of some project, deployed or not. */
+  isDomain?(hostname: string): boolean;
   /** The project's sandbox number, so its code runs as its own OS user (see lib/sandbox.ts). */
   sandboxId?(deploymentId: string): number | null;
 }
@@ -100,6 +102,13 @@ export function createEdgeHandler(opts: EdgeOptions) {
   const runtimeDir = opts.runtimeDir ?? path.join(path.dirname(opts.artifactsDir), RUNTIME_DIR);
   const deployments = new Map<string, LoadedDeployment>();
   const maxBody = opts.maxBodyBytes ?? 4.5 * 1024 * 1024;
+  /** For www.<domain> where <domain> is a custom domain and www itself isn't one: the apex. */
+  function wwwRedirectTarget(hostname: string): string | null {
+    if (!hostname.startsWith("www.") || !opts.lookup.isDomain) return null;
+    const apex = hostname.slice(4);
+    return opts.lookup.isDomain(apex) && !opts.lookup.isDomain(hostname) ? apex : null;
+  }
+
   /** Deployments whose files have been handed to their sandbox user, by deployment id. */
   const sandboxes = new Map<string, SandboxIdentity | null>();
 
@@ -349,6 +358,15 @@ export function createEdgeHandler(opts: EdgeOptions) {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? "GET";
     res.setHeader("server", "orbit-edge");
+    const apex = wwwRedirectTarget(hostnameFromHost(req.headers.host));
+    if (apex) {
+      // Like Vercel: www.<domain> sends people to <domain> unless www is a domain of its own.
+      const proto = String(req.headers["x-forwarded-proto"] ?? "http")
+        .split(",")[0]!
+        .trim();
+      res.writeHead(308, { location: `${proto}://${apex}${req.url ?? "/"}`, "cache-control": "public, max-age=3600" });
+      return void res.end();
+    }
     const label = labelFromHost(req.headers.host, opts.rootDomain);
     const domain = label ? null : opts.lookup.resolveDomain?.(hostnameFromHost(req.headers.host));
     if (!label && !domain) {

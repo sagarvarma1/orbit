@@ -120,6 +120,8 @@ export function domainRoutes(app: FastifyInstance, ctx: AppContext): void {
     reply.header("cache-control", "no-store");
     if (host && host === appHost(ctx.config)) return { allowed: true };
     if (ctx.repo.getDomain(host)) return { allowed: true };
+    // www.<domain> redirects to a custom domain at the edge, so it needs a certificate too.
+    if (host.startsWith("www.") && ctx.repo.getDomain(host.slice(4))) return { allowed: true };
     const suffix = `.${ctx.config.rootDomain}`;
     if (host.endsWith(suffix)) {
       const label = host.slice(0, -suffix.length);

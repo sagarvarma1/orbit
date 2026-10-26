@@ -46,6 +46,7 @@ const lookup: TargetLookup = {
     if (!domain || !project) return null;
     return this.resolve(domain.branch ? branchAliasLabel(project.name, domain.branch) : project.name);
   },
+  isDomain: (hostname) => repo.getDomain(hostname) !== undefined,
   sandboxId: (deploymentId) => repo.sandboxId(deploymentId),
 };
 

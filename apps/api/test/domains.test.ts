@@ -103,6 +103,10 @@ describe("domain routes", () => {
     expect(await allowed("nope.localhost")).toBe(404);
     expect(await allowed("evil.com")).toBe(404);
     expect(await allowed("")).toBe(404);
+    // www of a custom domain redirects to it, so it gets a certificate; www of anything else doesn't.
+    await add("site", "example.org");
+    expect(await allowed("www.example.org")).toBe(200);
+    expect(await allowed("www.evil.com")).toBe(404);
   });
 });
 
@@ -132,6 +136,40 @@ describe("edge routing for custom domains", () => {
       );
     expect(await get("WWW.example.com:443")).toBe(503); // found, still building
     expect(await get("unknown.example.com")).toBe(404);
+    server.close();
+  });
+
+  it("redirects www.<domain> to a custom domain, keeping the path, unless www is a domain itself", async () => {
+    const { createEdgeHandler } = await import("../src/edge/server.js");
+    const { default: http } = await import("node:http");
+    const domains = new Set(["orbit.dev", "example.com", "www.example.com"]);
+    const handler = createEdgeHandler({
+      rootDomain: "orbit.dev",
+      artifactsDir: "/nonexistent",
+      functionTimeoutMs: 1000,
+      functionMemoryMb: 64,
+      lookup: {
+        resolve: () => null,
+        resolveDomain: (host) => (domains.has(host) ? { deploymentId: "dpl-abcdefghij", status: "building" } : null),
+        isDomain: (host) => domains.has(host),
+      },
+    });
+    const server = http.createServer((req, res) => void handler(req, res));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const get = (host: string, path = "/") =>
+      new Promise<{ status: number; location?: string }>((resolve) =>
+        http.get({ port, host: "127.0.0.1", path, headers: { host, "x-forwarded-proto": "https" } }, (res) => {
+          res.resume();
+          resolve({ status: res.statusCode!, location: res.headers.location });
+        }),
+      );
+    // The platform's own root domain, attached to a project (a landing page).
+    expect(await get("www.orbit.dev", "/docs?x=1")).toEqual({ status: 308, location: "https://orbit.dev/docs?x=1" });
+    // www.example.com is its own domain, so it's served, not redirected.
+    expect((await get("www.example.com")).status).toBe(503);
+    // Not a domain of anything: no redirect.
+    expect((await get("www.unknown.com")).status).toBe(404);
     server.close();
   });
 });

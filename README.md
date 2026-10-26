@@ -53,7 +53,7 @@ build in an isolated container, and real files served by a Host-routing edge wit
 **Serving**
 
 - **Custom domains with automatic HTTPS**: add a domain to a project, point DNS at the server, and Caddy issues a
-  certificate on the first request. Orbit only approves certificates for hostnames it actually serves.
+  certificate on the first request. Orbit only approves certificates for hostnames it actually serves. `www.` of a custom domain redirects to it (unless `www` is added as a domain itself).
 - **Immutable deployments** at `<deployment-id>.<your-domain>`, plus `<project>.<your-domain>` for production and
   `<project>-git-<branch>.<your-domain>` for the latest build of each branch.
 - **Serverless functions**: `api/**/*.{js,ts}` bundled with esbuild and served at `/api/*`, with `[param]` segments.
