@@ -5,6 +5,24 @@ import { globToRegExp } from "../lib/glob.js";
 import type { FunctionRoute } from "../lib/manifest.js";
 
 const SOURCE_RE = /\.(?:js|mjs|cjs|ts|mts|cts)$/;
+const PYTHON_RE = /\.py$/;
+/** Where a Python function's installed requirements live, relative to the function root. */
+export const PYTHON_PACKAGES_DIR = ".orbit/python";
+/** Vercel's limit for a function bundle (uncompressed). */
+const MAX_PYTHON_BUNDLE_BYTES = 250 * 1024 * 1024;
+/** Never part of a Python function bundle. */
+const PYTHON_EXCLUDED = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  ".vercel",
+  ".orbit",
+  "__pycache__",
+  ".venv",
+  "venv",
+  ".pytest_cache",
+  ".mypy_cache",
+]);
 
 function walk(dir: string, rel = ""): string[] {
   const out: string[] = [];
@@ -13,14 +31,18 @@ function walk(dir: string, rel = ""): string[] {
     if (entry.name.startsWith("_") || entry.name.startsWith(".") || entry.name === "node_modules") continue;
     const child = path.posix.join(rel, entry.name);
     if (entry.isDirectory()) out.push(...walk(dir, child));
-    else if (SOURCE_RE.test(entry.name) && !/\.d\.[cm]?ts$/.test(entry.name) && !/\.test\./.test(entry.name)) out.push(child);
+    else if (
+      (SOURCE_RE.test(entry.name) && !/\.d\.[cm]?ts$/.test(entry.name) && !/\.test\./.test(entry.name)) ||
+      (PYTHON_RE.test(entry.name) && !/^test_|_test\.py$/.test(entry.name))
+    )
+      out.push(child);
   }
   return out;
 }
 
 /** "users/[id].ts" -> "/api/users/[id]", "index.ts" -> "/api" */
 export function routeForFile(relFile: string): string {
-  const withoutExt = relFile.replace(SOURCE_RE, "");
+  const withoutExt = relFile.replace(SOURCE_RE, "").replace(PYTHON_RE, "");
   const route = withoutExt === "index" ? "" : withoutExt.replace(/\/index$/, "");
   return route ? `/api/${route}` : "/api";
 }
@@ -28,6 +50,7 @@ export function routeForFile(relFile: string): string {
 /** One entry of vercel.json `functions`, keyed by a glob over source paths like "api/*.js". */
 export interface FunctionConfig {
   includeFiles?: string;
+  excludeFiles?: string;
   memory?: number;
   maxDuration?: number;
 }
@@ -44,6 +67,8 @@ export interface BundleResult {
   routes: FunctionRoute[];
   /** Files copied from `includeFiles`. */
   includedFiles: number;
+  /** Python functions were found: the project's files were copied, requirements still need installing. */
+  python: boolean;
 }
 
 function configFor(config: unknown, source: string): FunctionConfig {
@@ -77,49 +102,63 @@ function projectFiles(dir: string, rel = ""): string[] {
  * from a function in api/ finds included files.
  */
 export async function bundleFunctions(projectDir: string, outDir: string, opts: BundleOptions): Promise<BundleResult> {
+  const empty = { routes: [], includedFiles: 0, python: false };
   const apiDir = path.join(projectDir, "api");
-  if (!fs.existsSync(apiDir) || !fs.statSync(apiDir).isDirectory()) return { routes: [], includedFiles: 0 };
+  if (!fs.existsSync(apiDir) || !fs.statSync(apiDir).isDirectory()) return empty;
   const files = walk(apiDir);
-  if (files.length === 0) return { routes: [], includedFiles: 0 };
+  if (files.length === 0) return empty;
+  const nodeFiles = files.filter((f) => SOURCE_RE.test(f));
+  const pythonFiles = files.filter((f) => PYTHON_RE.test(f));
 
-  const entryPoints = Object.fromEntries(files.map((f) => [`api/${f.replace(SOURCE_RE, "")}`, path.join(apiDir, f)]));
-  await build({
-    entryPoints,
-    outdir: outDir,
-    outExtension: { ".js": ".mjs" },
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    target: "node22",
-    absWorkingDir: projectDir,
-    logLevel: "silent",
-    // Bundled CommonJS dependencies may call require(); give ESM output a real one.
-    // CommonJS code also expects __dirname and __filename, which ESM doesn't have.
-    banner: {
-      js: [
-        "import { createRequire as __orbitCreateRequire } from 'node:module';",
-        "import { fileURLToPath as __orbitFileURLToPath } from 'node:url';",
-        "import { dirname as __orbitDirname } from 'node:path';",
-        "const require = __orbitCreateRequire(import.meta.url);",
-        "const __orbit_filename = __orbitFileURLToPath(import.meta.url);",
-        "const __orbit_dirname = __orbitDirname(__orbit_filename);",
-      ].join(" "),
-    },
-    // Only free references are replaced, so code that declares its own __dirname is untouched.
-    define: { __dirname: "__orbit_dirname", __filename: "__orbit_filename" },
-  });
+  // Two files can't serve one route (api/hello.js and api/hello.py).
+  const seen = new Map<string, string>();
+  for (const f of files) {
+    const route = routeForFile(f);
+    const other = seen.get(route);
+    if (other) throw new Error(`api/${other} and api/${f} both define ${route}`);
+    seen.set(route, f);
+  }
+
+  if (nodeFiles.length) {
+    const entryPoints = Object.fromEntries(nodeFiles.map((f) => [`api/${f.replace(SOURCE_RE, "")}`, path.join(apiDir, f)]));
+    await build({
+      entryPoints,
+      outdir: outDir,
+      outExtension: { ".js": ".mjs" },
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node22",
+      absWorkingDir: projectDir,
+      logLevel: "silent",
+      // Bundled CommonJS dependencies may call require(); give ESM output a real one.
+      // CommonJS code also expects __dirname and __filename, which ESM doesn't have.
+      banner: {
+        js: [
+          "import { createRequire as __orbitCreateRequire } from 'node:module';",
+          "import { fileURLToPath as __orbitFileURLToPath } from 'node:url';",
+          "import { dirname as __orbitDirname } from 'node:path';",
+          "const require = __orbitCreateRequire(import.meta.url);",
+          "const __orbit_filename = __orbitFileURLToPath(import.meta.url);",
+          "const __orbit_dirname = __orbitDirname(__orbit_filename);",
+        ].join(" "),
+      },
+      // Only free references are replaced, so code that declares its own __dirname is untouched.
+      define: { __dirname: "__orbit_dirname", __filename: "__orbit_filename" },
+    });
+  }
 
   const included = new Set<string>();
   let allFiles: string[] | null = null;
   const routes = files.map((f): FunctionRoute => {
     const source = `api/${f}`;
     const config = configFor(opts.config, source);
-    const route: FunctionRoute = {
-      route: routeForFile(f),
-      file: path.posix.join("functions", `api/${f.replace(SOURCE_RE, "")}.mjs`),
-    };
+    const python = PYTHON_RE.test(f);
+    const route: FunctionRoute = python
+      ? { route: routeForFile(f), file: path.posix.join("functions", source), runtime: "python" }
+      : { route: routeForFile(f), file: path.posix.join("functions", `api/${f.replace(SOURCE_RE, "")}.mjs`), runtime: "node" };
 
-    if (typeof config.includeFiles === "string") {
+    if (typeof config.includeFiles === "string" && !python) {
       allFiles ??= projectFiles(projectDir);
       const re = globToRegExp(config.includeFiles);
       const matched = allFiles.filter((p) => re.test(p));
@@ -148,5 +187,44 @@ export async function bundleFunctions(projectDir: string, outDir: string, opts: 
     fs.copyFileSync(path.join(projectDir, p), target);
   }
 
-  return { routes: routes.sort((a, b) => a.route.localeCompare(b.route)), includedFiles: included.size };
+  // Like Vercel, a Python function bundle is the project's files (Python isn't bundled), minus
+  // anything matching a function's `excludeFiles`.
+  if (pythonFiles.length) {
+    const excludes = pythonFiles
+      .map((f) => configFor(opts.config, `api/${f}`).excludeFiles)
+      .filter((g): g is string => typeof g === "string")
+      .map((g) => globToRegExp(g));
+    let bytes = 0;
+    for (const p of pythonProjectFiles(projectDir)) {
+      if (excludes.some((re) => re.test(p))) continue;
+      const target = path.join(outDir, p);
+      if (fs.existsSync(target)) continue;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(projectDir, p), target);
+      bytes += fs.statSync(target).size;
+    }
+    if (bytes > MAX_PYTHON_BUNDLE_BYTES) {
+      opts.warn?.(
+        `Python function files are ${Math.round(bytes / 1024 / 1024)} MB, above Vercel's 250 MB limit; use excludeFiles in vercel.json`,
+      );
+    }
+  }
+
+  return {
+    routes: routes.sort((a, b) => a.route.localeCompare(b.route)),
+    includedFiles: included.size,
+    python: pythonFiles.length > 0,
+  };
+}
+
+/** The project's files for a Python bundle: no VCS, dependencies, caches, virtualenvs or env files. */
+function pythonProjectFiles(dir: string, rel = ""): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+    if (PYTHON_EXCLUDED.has(entry.name) || entry.name.startsWith(".env")) continue;
+    const child = path.posix.join(rel, entry.name);
+    if (entry.isDirectory()) out.push(...pythonProjectFiles(dir, child));
+    else if (entry.isFile() && !entry.name.endsWith(".pyc")) out.push(child);
+  }
+  return out;
 }

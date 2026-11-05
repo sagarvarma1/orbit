@@ -46,6 +46,8 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
   const tabs = [
     { href: `/${name}`, label: "Overview", active: pathname === `/${name}` || pathname.startsWith(`/${name}/deployments`) },
     { href: `/${name}/env`, label: "Environment Variables", active: pathname === `/${name}/env` },
+    { href: `/${name}/storage`, label: "Storage", active: pathname === `/${name}/storage` },
+    { href: `/${name}/crons`, label: "Cron Jobs", active: pathname === `/${name}/crons` },
     { href: `/${name}/settings`, label: "Settings", active: pathname === `/${name}/settings` },
   ];
 

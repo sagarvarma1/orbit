@@ -43,6 +43,29 @@ if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; t
 fi
 docker info >/dev/null 2>&1 || fail "Docker is installed but the daemon isn't running (try: systemctl start docker)."
 
+# gVisor gives every sandbox container its own kernel, like Vercel's microVMs. Without it, deployment
+# code still runs in locked-down containers, but they share the host's kernel.
+if ! docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+  ask INSTALL_GVISOR "Install gVisor so deployment code runs with its own kernel? (recommended) (y/n)" "y"
+  if [ "$INSTALL_GVISOR" = "y" ]; then
+    if command -v apt-get >/dev/null 2>&1; then
+      # gVisor's own apt repository, which installs runsc with its helper binaries.
+      curl -fsSL https://gvisor.dev/archive.key -o /usr/share/keyrings/gvisor-archive-keyring.asc ||
+        fail "Couldn't download gVisor's signing key."
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.asc] https://storage.googleapis.com/gvisor/releases release main" \
+        >/etc/apt/sources.list.d/gvisor.list
+      { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq runsc; } >/dev/null ||
+        fail "Couldn't install gVisor from its apt repository."
+      # Sandboxes serve requests on unix sockets in bind mounts, which gVisor allows with --host-uds.
+      runsc install -- --host-uds=create >/dev/null
+      systemctl restart docker
+      info "gVisor installed (runtime: runsc)."
+    else
+      info "Skipping gVisor: this installer sets it up with apt. See https://gvisor.dev/docs/user_guide/install/, then run: runsc install -- --host-uds=create"
+    fi
+  fi
+fi
+
 # 2. Settings ---------------------------------------------------------------------------
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 echo

@@ -95,6 +95,7 @@ const project = (id: string, ownerId: string | null): Project => ({
   outputDirectory: null,
   rootDirectory: ".",
   autoPromotePaused: false,
+  cronsEnabled: true,
   ownerId,
   createdAt: 1,
   updatedAt: 1,

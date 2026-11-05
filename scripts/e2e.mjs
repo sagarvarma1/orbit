@@ -7,6 +7,8 @@
  *   node scripts/e2e.mjs            # full run
  *   node scripts/e2e.mjs --offline  # skip the public GitHub repos
  *   node scripts/e2e.mjs --next     # also build a Next.js static-export app (~150 MB install)
+ *   node scripts/e2e.mjs --containers  # run deployment code in sandbox containers via sandboxd
+ *                                      # (Linux, root, Docker socket; see scripts/sandbox-test.sh)
  */
 import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
@@ -23,6 +25,7 @@ const EDGE_PORT = 8180;
 const SECRET = "e2e-secret";
 const OFFLINE = process.argv.includes("--offline");
 const WITH_NEXT = process.argv.includes("--next");
+const CONTAINERS = process.argv.includes("--containers");
 const API = `http://127.0.0.1:${API_PORT}`;
 const GITHUB_PORT = 4199;
 
@@ -40,6 +43,14 @@ let failed = 0;
 // ------------------------------------------------------------------ helpers
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** JSON from a response body, or {} when it isn't JSON (an error page), so the check fails instead of the run. */
+function parseJson(body) {
+  try {
+    return JSON.parse(body || "{}");
+  } catch {
+    return {};
+  }
+}
 
 function check(name, ok, detail = "") {
   if (ok) {
@@ -76,6 +87,29 @@ function edge(host, urlPath = "/", headers = {}) {
     );
     req.on("error", reject);
     req.end();
+  });
+}
+
+/** Any method, with a body, to the edge (or to blob.localhost when host is "blob"). */
+function edgeRequest(method, host, urlPath, { headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: EDGE_PORT,
+        method,
+        path: urlPath,
+        headers: { host: `${host}.localhost:${EDGE_PORT}`, ...headers },
+      },
+      (res) => {
+        let text = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (text += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: text }));
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
   });
 }
 
@@ -164,6 +198,9 @@ function start(name, script) {
       GITHUB_API_URL: `http://127.0.0.1:${GITHUB_PORT}`,
       ORBIT_BUILDER: process.env.ORBIT_BUILDER ?? "auto",
       LOG_LEVEL: "warn",
+      ...(CONTAINERS
+        ? { ORBIT_SANDBOX: "container", ORBIT_RUNTIME_IMAGE: process.env.ORBIT_RUNTIME_IMAGE ?? "orbit-runtime:dev" }
+        : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -248,6 +285,63 @@ fs.rmSync(path.join(monoRepo, "node_modules"), { recursive: true, force: true })
 git(monoRepo, "add", "-A");
 git(monoRepo, "commit", "-qm", "Add lockfile");
 
+/** A static site with a function that a cron job calls every minute. */
+const cronRepo = makeRepo("cron", {
+  "index.html": "<h1>cron</h1>",
+  "api/tick.js":
+    "export function GET(req) { return Response.json({ auth: req.headers.get('authorization'), ua: req.headers.get('user-agent') }); }",
+  "vercel.json": JSON.stringify({ crons: [{ path: "/api/tick", schedule: "* * * * *" }] }),
+});
+/** Python functions: a Flask app from requirements.txt, a BaseHTTPRequestHandler and a dynamic route. */
+const pythonRepo = makeRepo("python", {
+  "index.html": "<h1>python</h1>",
+  "requirements.txt": "flask==3.1.0\n",
+  "api/flask.py":
+    "from flask import Flask, jsonify, request\nfrom _lib.util import shout\napp = Flask(__name__)\n\n" +
+    "@app.route('/api/flask', methods=['GET', 'POST'])\ndef index():\n" +
+    "    return jsonify(method=request.method, name=shout(request.args.get('name', 'nobody')))\n",
+  "api/_lib/util.py": "def shout(s):\n    return s.upper()\n",
+  "api/hello.py":
+    "import os\nfrom http.server import BaseHTTPRequestHandler\n\nclass handler(BaseHTTPRequestHandler):\n" +
+    "    def do_GET(self):\n        self.send_response(200)\n        self.send_header('content-type', 'text/plain')\n" +
+    "        self.end_headers()\n        self.wfile.write(('hello from python ' + os.environ.get('ORBIT_ENV', '')).encode())\n",
+  "api/items/[id].py":
+    "from urllib.parse import parse_qs\n\ndef app(environ, start_response):\n" +
+    "    start_response('200 OK', [('content-type', 'text/plain')])\n" +
+    "    return [('item ' + parse_qs(environ['QUERY_STRING'])['id'][0]).encode()]\n",
+});
+
+/** Uses the real @vercel/blob SDK from a function: server uploads, and browser uploads via handleUpload. */
+const blobRepo = makeRepo("blob", {
+  "index.html": "<h1>blob</h1>",
+  "package.json": JSON.stringify({ name: "blob-app", private: true, dependencies: { "@vercel/blob": "2.8.2" } }),
+  "api/upload.mjs": `import { put, list } from "@vercel/blob";
+export async function POST(request) {
+  const blob = await put("e2e/note.txt", await request.text(), { access: "public", allowOverwrite: true });
+  const listed = await list({ prefix: "e2e/" });
+  return Response.json({ url: blob.url, count: listed.blobs.length });
+}`,
+  "api/handle-upload.mjs": `import { handleUpload } from "@vercel/blob/client";
+import { put } from "@vercel/blob";
+export async function POST(request) {
+  const body = await request.json();
+  const result = await handleUpload({
+    body,
+    request,
+    onBeforeGenerateToken: async () => ({ allowedContentTypes: ["text/plain"], tokenPayload: JSON.stringify({ user: "e2e" }) }),
+    onUploadCompleted: async ({ blob, tokenPayload }) => {
+      await put("e2e/completed.json", JSON.stringify({ url: blob.url, tokenPayload }), { access: "public", allowOverwrite: true });
+    },
+  });
+  return Response.json(result);
+}`,
+});
+
+const badCronRepo = makeRepo("bad-cron", {
+  "index.html": "<h1>bad cron</h1>",
+  "vercel.json": JSON.stringify({ crons: [{ path: "/api/tick", schedule: "0 5 * * MON" }] }),
+});
+
 const slowRepo = makeRepo("slow", {
   "package.json": JSON.stringify({
     name: "slow",
@@ -261,6 +355,7 @@ async function main() {
   console.log(`Orbit e2e · data: ${dataDir}`);
   await new Promise((resolve) => fakeGitHub.listen(GITHUB_PORT, "127.0.0.1", resolve));
   start("api", "src/index.ts");
+  if (CONTAINERS) start("sandboxd", "src/sandboxd.ts");
   start("edge", "src/edge.ts");
   for (let i = 0; i < 60; i++) {
     try {
@@ -270,6 +365,15 @@ async function main() {
     } catch {
       await sleep(500);
     }
+  }
+  if (CONTAINERS) {
+    let connected = false;
+    for (let i = 0; i < 120 && !connected; i++) {
+      connected = fs.readFileSync(path.join(tmp, "edge.log"), "utf8").includes("connected to sandboxd");
+      if (!connected) await sleep(500);
+    }
+    console.log("Sandbox containers");
+    check("edge connected to sandboxd", connected, fs.readFileSync(path.join(tmp, "sandboxd.log"), "utf8").slice(-1500));
   }
   console.log("Authentication");
   check("API requires sign-in", (await fetch(`${API}/api/projects`)).status === 401);
@@ -403,6 +507,135 @@ async function main() {
     headered.headers["x-content-type-options"] === "nosniff" && headered.headers["x-powered-by"] === "Orbit",
   );
   check("vercel.json itself is not served", (await edge("demo", "/vercel.json", { accept: "application/json" })).status !== 200);
+
+  console.log("\nCron jobs");
+  const cronApp = await api("POST", "/api/projects", {
+    repoUrl: `file://${cronRepo}`,
+    name: "cron",
+    env: [{ key: "CRON_SECRET", value: "e2e-cron-secret", targets: ["production"] }],
+  });
+  const cronDeployment = await waitFor(cronApp.deployment.id);
+  check("cron app deployed", cronDeployment.status === "ready", cronDeployment.errorMessage ?? "");
+  const cronLogs = (await api("GET", `/api/deployments/${cronDeployment.id}/logs`)).lines.map((l) => l.text);
+  check(
+    "build log lists the cron jobs",
+    cronLogs.some((t) => t.includes("Cron jobs from vercel.json: /api/tick (* * * * *)")),
+  );
+  const cronList = await api("GET", "/api/projects/cron/crons");
+  check(
+    "jobs listed from the production deployment with a next run",
+    cronList.deploymentId === cronDeployment.id && cronList.jobs.length === 1 && cronList.jobs[0].nextRunAt > Date.now(),
+    JSON.stringify(cronList.jobs),
+  );
+  const { run: manualRun } = await api("POST", "/api/projects/cron/crons/run", { path: "/api/tick", schedule: "* * * * *" });
+  const manualOut = JSON.parse(manualRun.output || "{}");
+  check("Run calls the job's path through the edge", manualRun.status === "success" && manualRun.statusCode === 200);
+  check(
+    "cron requests carry Bearer $CRON_SECRET and the cron user agent",
+    manualOut.auth === "Bearer e2e-cron-secret" && manualOut.ua === "vercel-cron/1.0",
+    manualRun.output,
+  );
+  const badCron = await api("POST", "/api/projects", { repoUrl: `file://${badCronRepo}`, name: "bad-cron" });
+  const badCronDeployment = await waitFor(badCron.deployment.id);
+  check(
+    "an invalid schedule fails the build",
+    badCronDeployment.status === "error" && /crons\.0\.schedule/.test(badCronDeployment.errorMessage ?? ""),
+    badCronDeployment.errorMessage ?? "",
+  );
+
+  console.log("\nPython functions");
+  const pyApp = await api("POST", "/api/projects", { repoUrl: `file://${pythonRepo}`, name: "python" });
+  const pyDeployment = await waitFor(pyApp.deployment.id);
+  check("Python app deployed", pyDeployment.status === "ready", pyDeployment.errorMessage ?? "");
+  const pyLogs = (await api("GET", `/api/deployments/${pyDeployment.id}/logs`)).lines.map((l) => l.text);
+  check(
+    "requirements.txt installed",
+    pyLogs.some((t) => t.startsWith("Installed Python dependencies")),
+  );
+  const flask = await edge("python", "/api/flask?name=orbit");
+  check(
+    "Flask (WSGI) app from requirements.txt serves requests",
+    flask.status === 200 && JSON.parse(flask.body || "{}").name === "ORBIT",
+    `${flask.status} ${flask.body.slice(0, 300)}`,
+  );
+  const pyHandler = await edge("python", "/api/hello");
+  check("BaseHTTPRequestHandler function runs with env", pyHandler.body === "hello from python production", pyHandler.body);
+  check("dynamic Python route gets its segment in the query", (await edge("python", "/api/items/7")).body === "item 7");
+  check("Python sources aren't served as static files", (await edge("python", "/api/flask.py")).status !== 200);
+  const pyRedeploy = await api("POST", `/api/deployments/${pyDeployment.id}/redeploy`, {});
+  await waitFor(pyRedeploy.deployment.id);
+  const pyRedeployLogs = (await api("GET", `/api/deployments/${pyRedeploy.deployment.id}/logs`)).lines.map((l) => l.text);
+  check(
+    "Python dependencies restored from the build cache on redeploy",
+    pyRedeployLogs.some((t) => t.startsWith("Restored Python dependencies from build cache")),
+  );
+
+  console.log("\nBlob storage (@vercel/blob SDK)");
+  const { store } = await api("POST", "/api/blob-stores", { name: "e2e uploads" });
+  check("blob store created with a Vercel-format token", store.token?.startsWith(`vercel_blob_rw_${store.id}_`));
+  const blobApp = await api("POST", "/api/projects", { repoUrl: `file://${blobRepo}`, name: "blobapp" });
+  await waitFor(blobApp.deployment.id);
+  await api("PUT", `/api/blob-stores/${store.id}/connections/blobapp`, { targets: ["production", "preview"] });
+  // Like Vercel, a connected store's token reaches the next deployment.
+  const blobRedeploy = await api("POST", `/api/deployments/${blobApp.deployment.id}/redeploy`, {});
+  const blobDeployment = await waitFor(blobRedeploy.deployment.id);
+  check("blob app deployed with the store connected", blobDeployment.status === "ready", blobDeployment.errorMessage ?? "");
+  // blob.localhost is loopback, which sandboxed code can't reach: in containers it's the container's
+  // own, and as root on Linux the sandbox firewall blocks it. On a server blob.<root> is a public
+  // hostname, so functions calling Blob are only checked unsandboxed.
+  const sandboxFirewall = process.platform === "linux" && process.getuid?.() === 0;
+  if (!CONTAINERS && !sandboxFirewall) {
+    const uploaded = await edgeRequest("POST", "blobapp", "/api/upload", { body: "hello from a function" });
+    const uploadedJson = parseJson(uploaded.body);
+    check(
+      "a function uploads with put() and lists with list()",
+      uploaded.status === 200 && uploadedJson.count === 1,
+      uploaded.body.slice(0, 300),
+    );
+    const blobPath = uploadedJson.url ? new URL(uploadedJson.url).pathname : "/";
+    const served = await edgeRequest("GET", "blob", blobPath);
+    check(
+      "the blob is served from blob.<root>",
+      served.status === 200 && served.body === "hello from a function",
+      `${served.status}`,
+    );
+    const tokenRes = await edgeRequest("POST", "blobapp", "/api/handle-upload", {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "blob.generate-client-token",
+        payload: { pathname: "e2e/client.txt", clientPayload: null, multipart: false },
+      }),
+    });
+    const clientToken = parseJson(tokenRes.body).clientToken ?? "";
+    check(
+      "handleUpload issues a client token",
+      clientToken.startsWith(`vercel_blob_client_${store.id}_`),
+      tokenRes.body.slice(0, 300),
+    );
+    const browserPut = await edgeRequest("PUT", "blob", "/api/?pathname=e2e%2Fclient.txt", {
+      headers: {
+        authorization: `Bearer ${clientToken}`,
+        "x-vercel-blob-access": "public",
+        "x-content-type": "text/plain",
+        "x-api-version": "13",
+        origin: "http://blobapp.localhost",
+      },
+      body: "uploaded from the browser",
+    });
+    check("a browser upload with the client token succeeds", browserPut.status === 200, browserPut.body.slice(0, 300));
+    check("blob API allows browser origins (CORS)", browserPut.headers["access-control-allow-origin"] === "*");
+    let completed = null;
+    for (let i = 0; i < 40 && !completed; i++) {
+      const res = await edgeRequest("GET", "blob", `/${store.id}/e2e/completed.json`);
+      if (res.status === 200) completed = JSON.parse(res.body);
+      else await sleep(250);
+    }
+    check(
+      "onUploadCompleted runs with the signed callback",
+      completed?.tokenPayload === JSON.stringify({ user: "e2e" }) && completed?.url?.endsWith("/e2e/client.txt"),
+      JSON.stringify(completed),
+    );
+  }
 
   console.log("\nPush-to-deploy: webhook push to a feature branch creates a preview");
   git(demoRepo, "checkout", "-qb", "feature/v2");
@@ -629,6 +862,25 @@ async function main() {
     /* pgrep exits 1 when nothing matches */
   }
   check("build process tree was killed", orphan.trim() === "", orphan);
+
+  if (CONTAINERS) {
+    const sandboxLog = fs.readFileSync(path.join(tmp, "sandboxd.log"), "utf8");
+    check("Node.js functions ran in sandbox containers", /\[dpl-[a-z0-9]+ \/api\/hello\.mjs\] started/.test(sandboxLog));
+    check("Python functions ran in sandbox containers", /\[dpl-[a-z0-9]+ \/api\/flask\.py\] started/.test(sandboxLog));
+  }
+
+  // The cron app was deployed minutes ago, so its every-minute job has had a chance to run.
+  console.log("\nCron jobs (on schedule)");
+  let scheduled = null;
+  const cronDeadline = Date.now() + 75_000;
+  while (!scheduled && Date.now() < cronDeadline) {
+    scheduled = (await api("GET", "/api/projects/cron/crons")).runs.find(
+      (r) => r.trigger === "schedule" && r.status !== "running",
+    );
+    if (!scheduled) await sleep(2000);
+  }
+  check("an every-minute job ran on schedule", scheduled?.status === "success", JSON.stringify(scheduled));
+  check("scheduled runs are for a whole UTC minute", scheduled ? scheduled.scheduledAt % 60_000 === 0 : false);
 }
 
 main()

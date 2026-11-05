@@ -165,7 +165,10 @@ describe.runIf(sandboxAvailable())("sandbox users (Linux, root)", () => {
           env: {},
           sandbox: B,
         },
-        (port) => fetch(`http://127.0.0.1:${port}/`).then((r) => r.text()),
+        (target) => {
+          if (!("port" in target)) throw new Error("expected a TCP app server");
+          return fetch(`http://${target.host}:${target.port}/`).then((r) => r.text());
+        },
       );
       expect(body).toBe(String(B.uid));
       const stat = fs.statSync(runtimeDir);

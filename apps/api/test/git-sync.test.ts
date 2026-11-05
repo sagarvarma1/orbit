@@ -32,6 +32,7 @@ function setup() {
     outputDirectory: null,
     rootDirectory: ".",
     autoPromotePaused: false,
+    cronsEnabled: true,
     ownerId: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),

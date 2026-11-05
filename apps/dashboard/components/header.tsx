@@ -52,6 +52,9 @@ export function Header() {
           )}
           {user && (
             <>
+              <Link href="/storage" className={pathname.startsWith("/storage") ? "text-white" : "hover:text-fg"}>
+                Storage
+              </Link>
               <Link href="/settings" className={pathname.startsWith("/settings") ? "text-white" : "hover:text-fg"}>
                 Settings
               </Link>

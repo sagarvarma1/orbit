@@ -4,6 +4,8 @@ import type { LogStore } from "./build/logs.js";
 import type { DeploymentService } from "./services/deployments.js";
 import type { Access } from "./services/access.js";
 import type { AuthService, PublicUser } from "./services/auth.js";
+import type { BlobService } from "./services/blob.js";
+import type { CronService } from "./services/crons.js";
 import type { GitHubApp } from "./services/github-app.js";
 import type { GitSync } from "./services/git-sync.js";
 import { NotFoundError } from "./lib/errors.js";
@@ -19,6 +21,8 @@ export interface AppContext {
   auth: AuthService;
   githubApp: GitHubApp;
   access: Access;
+  crons: CronService;
+  blob: BlobService;
 }
 
 /** A project the user may see. Other accounts' projects look exactly like missing ones. */

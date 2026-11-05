@@ -107,6 +107,68 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   last_used_at INTEGER
 );
 
+-- Each time a cron job ran (on schedule or from "Run"). Scheduled runs are unique per job and
+-- minute, so a restart, or two control planes, can't fire a job twice in the same minute.
+CREATE TABLE IF NOT EXISTS cron_runs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  deployment_id TEXT NOT NULL,
+  path          TEXT NOT NULL,
+  schedule      TEXT NOT NULL,
+  trigger       TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
+  scheduled_at  INTEGER NOT NULL,
+  started_at    INTEGER NOT NULL,
+  finished_at   INTEGER,
+  status        TEXT NOT NULL CHECK (status IN ('running', 'success', 'error')),
+  status_code   INTEGER,
+  duration_ms   INTEGER,
+  output        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cron_runs_once_idx ON cron_runs(project_id, path, schedule, scheduled_at)
+  WHERE trigger = 'schedule';
+CREATE INDEX IF NOT EXISTS cron_runs_project_idx ON cron_runs(project_id, id DESC);
+
+-- Blob stores (Vercel Blob compatible). Each belongs to an account and is connected to projects,
+-- which get <prefix>_READ_WRITE_TOKEN in the chosen environments.
+CREATE TABLE IF NOT EXISTS blob_stores (
+  id         TEXT PRIMARY KEY,
+  owner_id   TEXT REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  secret     TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS blob_stores_owner_idx ON blob_stores(owner_id);
+
+CREATE TABLE IF NOT EXISTS blob_store_projects (
+  store_id   TEXT NOT NULL REFERENCES blob_stores(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  targets    TEXT NOT NULL DEFAULT 'production,preview',
+  env_prefix TEXT NOT NULL DEFAULT 'BLOB',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (store_id, project_id)
+);
+
+CREATE TABLE IF NOT EXISTS blobs (
+  store_id      TEXT NOT NULL REFERENCES blob_stores(id) ON DELETE CASCADE,
+  pathname      TEXT NOT NULL,
+  object        TEXT NOT NULL,
+  size          INTEGER NOT NULL,
+  content_type  TEXT NOT NULL,
+  cache_max_age INTEGER NOT NULL,
+  access        TEXT NOT NULL CHECK (access IN ('public', 'private')),
+  etag          TEXT NOT NULL,
+  uploaded_at   INTEGER NOT NULL,
+  PRIMARY KEY (store_id, pathname)
+);
+
+-- Multipart uploads in progress; parts live on disk until completed.
+CREATE TABLE IF NOT EXISTS blob_uploads (
+  id         TEXT PRIMARY KEY,
+  store_id   TEXT NOT NULL REFERENCES blob_stores(id) ON DELETE CASCADE,
+  pathname   TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- Instance-wide settings, such as the GitHub App credentials.
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
@@ -131,6 +193,8 @@ const ADDED_COLUMNS: [string, string, string][] = [
   ["projects", "owner_id", "TEXT"],
   // The Linux user a project's code runs as (SANDBOX_UID_BASE + this), see lib/sandbox.ts.
   ["projects", "sandbox_id", "INTEGER"],
+  // "Disable Cron Jobs" in project settings, like Vercel.
+  ["projects", "crons_enabled", "INTEGER NOT NULL DEFAULT 1"],
 ];
 
 /**

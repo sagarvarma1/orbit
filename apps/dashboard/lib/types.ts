@@ -38,6 +38,7 @@ export interface Project {
   outputDirectory: string | null;
   rootDirectory: string;
   autoPromotePaused: boolean;
+  cronsEnabled: boolean;
   createdAt: number;
   updatedAt: number;
   productionUrl: string;
@@ -111,6 +112,7 @@ export interface PlatformConfig {
   githubApp: boolean;
   buildCache: boolean;
   gitPollIntervalSeconds: number;
+  blobApiUrl: string;
   presets: FrameworkPreset[];
 }
 
@@ -157,4 +159,62 @@ export interface DomainStatus {
     record: { type: "A" | "CNAME"; name: string; value: string } | null;
     detail: string;
   };
+}
+
+export interface CronRun {
+  id: number;
+  deploymentId: string;
+  path: string;
+  schedule: string;
+  trigger: "schedule" | "manual";
+  scheduledAt: number;
+  startedAt: number;
+  finishedAt: number | null;
+  status: "running" | "success" | "error";
+  statusCode: number | null;
+  durationMs: number | null;
+  output: string | null;
+}
+
+export interface CronJob {
+  path: string;
+  schedule: string;
+  nextRunAt: number | null;
+  lastRun: CronRun | null;
+}
+
+export interface CronStatus {
+  enabled: boolean;
+  deploymentId: string | null;
+  jobs: CronJob[];
+  runs: CronRun[];
+}
+
+export interface BlobConnection {
+  project: string;
+  targets: EnvTarget[];
+  envPrefix: string;
+  createdAt: number;
+}
+
+export interface BlobStore {
+  id: string;
+  name: string;
+  createdAt: number;
+  baseUrl: string;
+  usage: { count: number; bytes: number };
+  connections: BlobConnection[];
+  /** Only on a single store's page. */
+  token?: string;
+  apiUrl?: string;
+}
+
+/** A blob as Orbit Blob's (Vercel Blob's) list API returns it. */
+export interface BlobItem {
+  url: string;
+  downloadUrl: string;
+  pathname: string;
+  size: number;
+  uploadedAt: string;
+  etag: string;
 }

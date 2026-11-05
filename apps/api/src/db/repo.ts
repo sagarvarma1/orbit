@@ -21,6 +21,8 @@ export interface Project {
   outputDirectory: string | null;
   rootDirectory: string;
   autoPromotePaused: boolean;
+  /** Whether the production deployment's cron jobs run. */
+  cronsEnabled: boolean;
   /** The user who owns the project; only they (and admins) can see or change it. */
   ownerId: string | null;
   createdAt: number;
@@ -71,6 +73,59 @@ export interface Domain {
   branch: string | null;
   createdAt: number;
 }
+
+export type CronRunStatus = "running" | "success" | "error";
+
+export interface CronRun {
+  id: number;
+  projectId: string;
+  deploymentId: string;
+  path: string;
+  schedule: string;
+  trigger: "schedule" | "manual";
+  /** The minute the run was for (manual runs: when "Run" was pressed). */
+  scheduledAt: number;
+  startedAt: number;
+  finishedAt: number | null;
+  status: CronRunStatus;
+  statusCode: number | null;
+  durationMs: number | null;
+  /** The start of the response body, or the error. */
+  output: string | null;
+}
+
+export interface BlobStore {
+  id: string;
+  ownerId: string | null;
+  name: string;
+  /** The secret half of the read-write token. */
+  secret: string;
+  createdAt: number;
+}
+
+export interface BlobConnection {
+  storeId: string;
+  projectId: string;
+  targets: EnvTarget[];
+  envPrefix: string;
+  createdAt: number;
+}
+
+export interface BlobRecord {
+  storeId: string;
+  pathname: string;
+  /** File name on disk under the store's directory. */
+  object: string;
+  size: number;
+  contentType: string;
+  cacheMaxAge: number;
+  access: "public" | "private";
+  etag: string;
+  uploadedAt: number;
+}
+
+/** Vercel's read-write token format, so the @vercel/blob SDK finds the store ID in it. */
+export const blobToken = (store: Pick<BlobStore, "id" | "secret">) => `vercel_blob_rw_${store.id}_${store.secret}`;
 
 export type UserRole = "admin" | "member";
 
@@ -155,6 +210,7 @@ const toProject = (r: Row): Project => ({
   outputDirectory: (r.output_directory as string | null) ?? null,
   rootDirectory: (r.root_directory as string) ?? "",
   autoPromotePaused: Boolean(r.auto_promote_paused),
+  cronsEnabled: r.crons_enabled === undefined ? true : Boolean(r.crons_enabled),
   ownerId: (r.owner_id as string | null) ?? null,
   createdAt: Number(r.created_at),
   updatedAt: Number(r.updated_at),
@@ -188,6 +244,53 @@ const toAlias = (r: Row): Alias => ({
   kind: r.kind as Alias["kind"],
   updatedAt: Number(r.updated_at),
 });
+
+const toCronRun = (r: Row): CronRun => ({
+  id: Number(r.id),
+  projectId: r.project_id as string,
+  deploymentId: r.deployment_id as string,
+  path: r.path as string,
+  schedule: r.schedule as string,
+  trigger: r.trigger as CronRun["trigger"],
+  scheduledAt: Number(r.scheduled_at),
+  startedAt: Number(r.started_at),
+  finishedAt: r.finished_at == null ? null : Number(r.finished_at),
+  status: r.status as CronRunStatus,
+  statusCode: r.status_code == null ? null : Number(r.status_code),
+  durationMs: r.duration_ms == null ? null : Number(r.duration_ms),
+  output: (r.output as string | null) ?? null,
+});
+
+const toBlobStore = (r: Row): BlobStore => ({
+  id: r.id as string,
+  ownerId: (r.owner_id as string | null) ?? null,
+  name: r.name as string,
+  secret: r.secret as string,
+  createdAt: Number(r.created_at),
+});
+
+const toBlobConnection = (r: Row): BlobConnection => ({
+  storeId: r.store_id as string,
+  projectId: r.project_id as string,
+  targets: String(r.targets).split(",").filter(Boolean) as EnvTarget[],
+  envPrefix: r.env_prefix as string,
+  createdAt: Number(r.created_at),
+});
+
+const toBlob = (r: Row): BlobRecord => ({
+  storeId: r.store_id as string,
+  pathname: r.pathname as string,
+  object: r.object as string,
+  size: Number(r.size),
+  contentType: r.content_type as string,
+  cacheMaxAge: Number(r.cache_max_age),
+  access: r.access as BlobRecord["access"],
+  etag: r.etag as string,
+  uploadedAt: Number(r.uploaded_at),
+});
+
+/** Runs kept per project; older ones are deleted. */
+const CRON_RUNS_KEPT = 200;
 
 /** Thin, typed data-access layer. All SQL lives here. */
 export class Repo {
@@ -237,8 +340,8 @@ export class Repo {
     this.db
       .prepare(
         `INSERT INTO projects (id, name, repo_url, production_branch, framework, install_command, build_command,
-           output_directory, root_directory, auto_promote_paused, owner_id, created_at, updated_at, sandbox_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sandbox_id), 0) + 1 FROM projects))`,
+           output_directory, root_directory, auto_promote_paused, crons_enabled, owner_id, created_at, updated_at, sandbox_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sandbox_id), 0) + 1 FROM projects))`,
       )
       .run(
         p.id,
@@ -251,6 +354,7 @@ export class Repo {
         p.outputDirectory,
         p.rootDirectory,
         p.autoPromotePaused ? 1 : 0,
+        p.cronsEnabled === false ? 0 : 1,
         p.ownerId,
         p.createdAt,
         p.updatedAt,
@@ -268,6 +372,7 @@ export class Repo {
       outputDirectory: "output_directory",
       rootDirectory: "root_directory",
       autoPromotePaused: "auto_promote_paused",
+      cronsEnabled: "crons_enabled",
     };
     const sets: string[] = [];
     const values: (string | number | null)[] = [];
@@ -317,8 +422,17 @@ export class Repo {
   }
 
   /** Env vars that apply to a deployment target, as a plain object. */
+  /**
+   * The env a deployment gets: connected Blob stores' tokens (<prefix>_READ_WRITE_TOKEN, as on
+   * Vercel), then the project's own variables, which win on a name clash.
+   */
   envFor(projectId: string, target: DeploymentTarget): Record<string, string> {
     const env: Record<string, string> = {};
+    for (const c of this.listBlobConnections({ projectId })) {
+      if (!c.targets.includes(target)) continue;
+      const store = this.getBlobStore(c.storeId);
+      if (store) env[`${c.envPrefix}_READ_WRITE_TOKEN`] = blobToken(store);
+    }
     for (const v of this.listEnv(projectId)) if (v.targets.includes(target)) env[v.key] = v.value;
     return env;
   }
@@ -618,6 +732,192 @@ export class Repo {
 
   deleteApiToken(userId: string, id: string): boolean {
     return this.db.prepare("DELETE FROM api_tokens WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
+  }
+
+  // --------------------------------------------------------------- cron runs
+
+  /** Records a run as started. Returns null for a scheduled run that already exists (same job and minute). */
+  startCronRun(run: Omit<CronRun, "id" | "finishedAt" | "status" | "statusCode" | "durationMs" | "output">): CronRun | null {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO cron_runs (project_id, deployment_id, path, schedule, trigger, scheduled_at, started_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'running')`,
+      )
+      .run(run.projectId, run.deploymentId, run.path, run.schedule, run.trigger, run.scheduledAt, run.startedAt);
+    if (result.changes === 0) return null;
+    return this.getCronRun(Number(result.lastInsertRowid))!;
+  }
+
+  finishCronRun(id: number, result: { status: CronRunStatus; statusCode: number | null; output: string | null }): CronRun {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE cron_runs SET status = ?, status_code = ?, output = ?, finished_at = ?, duration_ms = ? - started_at WHERE id = ?`,
+      )
+      .run(result.status, result.statusCode, result.output, now, now, id);
+    const run = this.getCronRun(id)!;
+    this.db
+      .prepare(
+        `DELETE FROM cron_runs WHERE project_id = ? AND id NOT IN
+           (SELECT id FROM cron_runs WHERE project_id = ? ORDER BY id DESC LIMIT ${CRON_RUNS_KEPT})`,
+      )
+      .run(run.projectId, run.projectId);
+    return run;
+  }
+
+  getCronRun(id: number): CronRun | undefined {
+    const row = this.db.prepare("SELECT * FROM cron_runs WHERE id = ?").get(id) as Row | undefined;
+    return row ? toCronRun(row) : undefined;
+  }
+
+  listCronRuns(projectId: string, limit = 50): CronRun[] {
+    return (
+      this.db.prepare("SELECT * FROM cron_runs WHERE project_id = ? ORDER BY id DESC LIMIT ?").all(projectId, limit) as Row[]
+    ).map(toCronRun);
+  }
+
+  /** Runs left "running" by a control plane that stopped mid-request. */
+  failInterruptedCronRuns(): number {
+    const now = Date.now();
+    return Number(
+      this.db
+        .prepare(
+          `UPDATE cron_runs SET status = 'error', output = 'Interrupted: Orbit restarted while the job was running',
+             finished_at = ?, duration_ms = ? - started_at WHERE status = 'running'`,
+        )
+        .run(now, now).changes,
+    );
+  }
+
+  // ------------------------------------------------------------- blob stores
+
+  listBlobStores(ownerId?: string): BlobStore[] {
+    const rows = ownerId
+      ? this.db.prepare("SELECT * FROM blob_stores WHERE owner_id = ? ORDER BY created_at DESC").all(ownerId)
+      : this.db.prepare("SELECT * FROM blob_stores ORDER BY created_at DESC").all();
+    return (rows as Row[]).map(toBlobStore);
+  }
+
+  getBlobStore(id: string): BlobStore | undefined {
+    const row = this.db.prepare("SELECT * FROM blob_stores WHERE id = ?").get(id) as Row | undefined;
+    return row ? toBlobStore(row) : undefined;
+  }
+
+  insertBlobStore(store: BlobStore): void {
+    this.db
+      .prepare("INSERT INTO blob_stores (id, owner_id, name, secret, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(store.id, store.ownerId, store.name, store.secret, store.createdAt);
+  }
+
+  updateBlobStore(id: string, patch: { name?: string; secret?: string }): void {
+    if (patch.name !== undefined) this.db.prepare("UPDATE blob_stores SET name = ? WHERE id = ?").run(patch.name, id);
+    if (patch.secret !== undefined) this.db.prepare("UPDATE blob_stores SET secret = ? WHERE id = ?").run(patch.secret, id);
+  }
+
+  deleteBlobStore(id: string): void {
+    this.db.prepare("DELETE FROM blob_stores WHERE id = ?").run(id);
+  }
+
+  listBlobConnections(filter: { storeId?: string; projectId?: string }): BlobConnection[] {
+    const rows = filter.storeId
+      ? this.db.prepare("SELECT * FROM blob_store_projects WHERE store_id = ? ORDER BY created_at").all(filter.storeId)
+      : this.db.prepare("SELECT * FROM blob_store_projects WHERE project_id = ? ORDER BY created_at").all(filter.projectId!);
+    return (rows as Row[]).map(toBlobConnection);
+  }
+
+  upsertBlobConnection(c: Omit<BlobConnection, "createdAt">): void {
+    this.db
+      .prepare(
+        `INSERT INTO blob_store_projects (store_id, project_id, targets, env_prefix, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(store_id, project_id) DO UPDATE SET targets = excluded.targets, env_prefix = excluded.env_prefix`,
+      )
+      .run(c.storeId, c.projectId, c.targets.join(","), c.envPrefix, Date.now());
+  }
+
+  deleteBlobConnection(storeId: string, projectId: string): boolean {
+    return (
+      this.db.prepare("DELETE FROM blob_store_projects WHERE store_id = ? AND project_id = ?").run(storeId, projectId).changes > 0
+    );
+  }
+
+  getBlob(storeId: string, pathname: string): BlobRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM blobs WHERE store_id = ? AND pathname = ?").get(storeId, pathname) as
+      Row | undefined;
+    return row ? toBlob(row) : undefined;
+  }
+
+  /** Inserts or replaces a blob; returns the object it replaced, if any (to delete from disk). */
+  putBlob(blob: BlobRecord): string | null {
+    return transaction(this.db, () => {
+      const previous = this.getBlob(blob.storeId, blob.pathname);
+      this.db
+        .prepare(
+          `INSERT INTO blobs (store_id, pathname, object, size, content_type, cache_max_age, access, etag, uploaded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(store_id, pathname) DO UPDATE SET object = excluded.object, size = excluded.size,
+             content_type = excluded.content_type, cache_max_age = excluded.cache_max_age, access = excluded.access,
+             etag = excluded.etag, uploaded_at = excluded.uploaded_at`,
+        )
+        .run(
+          blob.storeId,
+          blob.pathname,
+          blob.object,
+          blob.size,
+          blob.contentType,
+          blob.cacheMaxAge,
+          blob.access,
+          blob.etag,
+          blob.uploadedAt,
+        );
+      return previous && previous.object !== blob.object ? previous.object : null;
+    });
+  }
+
+  deleteBlob(storeId: string, pathname: string): BlobRecord | undefined {
+    const blob = this.getBlob(storeId, pathname);
+    if (blob) this.db.prepare("DELETE FROM blobs WHERE store_id = ? AND pathname = ?").run(storeId, pathname);
+    return blob;
+  }
+
+  /** Blobs in pathname order after `cursor`, with `prefix`. One extra row tells whether there are more. */
+  listBlobs(storeId: string, opts: { prefix: string; after: string | null; limit: number }): BlobRecord[] {
+    // Pathnames starting with the prefix sort between prefix and prefix + U+FFFF.
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM blobs WHERE store_id = ? AND pathname >= ? AND pathname < ? AND pathname > ?
+         ORDER BY pathname LIMIT ?`,
+      )
+      .all(storeId, opts.prefix, `${opts.prefix}\uffff`, opts.after ?? "", opts.limit) as Row[];
+    return rows.map(toBlob);
+  }
+
+  blobUsage(storeId: string): { count: number; bytes: number } {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM blobs WHERE store_id = ?")
+      .get(storeId) as Row;
+    return { count: Number(row.n), bytes: Number(row.bytes) };
+  }
+
+  insertBlobUpload(upload: { id: string; storeId: string; pathname: string }): void {
+    this.db
+      .prepare("INSERT INTO blob_uploads (id, store_id, pathname, created_at) VALUES (?, ?, ?, ?)")
+      .run(upload.id, upload.storeId, upload.pathname, Date.now());
+  }
+
+  getBlobUpload(id: string): { id: string; storeId: string; pathname: string; createdAt: number } | undefined {
+    const row = this.db.prepare("SELECT * FROM blob_uploads WHERE id = ?").get(id) as Row | undefined;
+    return row
+      ? {
+          id: row.id as string,
+          storeId: row.store_id as string,
+          pathname: row.pathname as string,
+          createdAt: Number(row.created_at),
+        }
+      : undefined;
+  }
+
+  deleteBlobUpload(id: string): void {
+    this.db.prepare("DELETE FROM blob_uploads WHERE id = ?").run(id);
   }
 
   // ---------------------------------------------------------------- settings

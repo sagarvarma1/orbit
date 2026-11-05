@@ -1,3 +1,4 @@
+import type { CronJob } from "./cron.js";
 import type { RoutingConfig } from "./routing.js";
 
 /** Written once to data/artifacts/<id>/orbit.json when a deployment is published. Never modified. */
@@ -15,6 +16,8 @@ export interface DeploymentManifest {
   server?: ServerConfig;
   /** Redirects, rewrites and headers from the repo's vercel.json (absent when it has none). */
   routing?: RoutingConfig;
+  /** Cron jobs from vercel.json; the control plane runs them while this is the production deployment. */
+  crons?: CronJob[];
   fileCount: number;
   totalBytes: number;
   createdAt: number;
@@ -25,11 +28,16 @@ export interface ServerConfig {
   entry: string;
 }
 
+/** Vercel's Node.js and Python runtimes. */
+export type FunctionRuntime = "node" | "python";
+
 export interface FunctionRoute {
   /** e.g. "/api/hello" or "/api/users/[id]". */
   route: string;
   /** Bundle path relative to the artifact dir, e.g. "functions/api/hello.mjs". */
   file: string;
+  /** Absent in manifests from before Python support: Node.js. */
+  runtime?: FunctionRuntime;
   /** From vercel.json `functions` (capped by the server); otherwise the server defaults apply. */
   memoryMb?: number;
   maxDurationMs?: number;

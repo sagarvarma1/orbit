@@ -29,6 +29,8 @@ services:
       ORBIT_DASHBOARD_URL: ${ORBIT_DASHBOARD_URL:-http://localhost:3000}
       BUILD_CACHE: ${BUILD_CACHE:-1}
       GIT_POLL_INTERVAL_SECONDS: ${GIT_POLL_INTERVAL_SECONDS:-10}
+      # Cron jobs: the control plane calls the edge on the Docker network.
+      ORBIT_EDGE_INTERNAL_URL: http://edge:8080
     volumes:
       - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -40,10 +42,38 @@ services:
     command: ["node", "--disable-warning=ExperimentalWarning", "dist/edge.js"]
     environment:
       <<: *orbit-env
+      # "container" runs deployment code in sandbox containers (Linux hosts; start with
+      # `--profile sandbox`). Docker Desktop's file sharing can't carry the sandboxes' unix sockets.
+      ORBIT_SANDBOX: ${ORBIT_SANDBOX:-process}
+      # Orbit Blob (blob.<root>) is served by the control plane.
+      ORBIT_API_INTERNAL_URL: http://api:4000
     volumes:
       - ./data:/data
     ports: ["8080:8080"]
     restart: unless-stopped
+
+  sandboxd:
+    profiles: [sandbox]
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    command: ["node", "--disable-warning=ExperimentalWarning", "dist/sandboxd.js"]
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    environment:
+      <<: *orbit-env
+      ORBIT_HOST_DATA_DIR: ${ORBIT_HOST_DATA_DIR:-${PWD}/data}
+      ORBIT_RUNTIME_IMAGE: orbit-runtime:local
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: [runtime]
+    restart: unless-stopped
+
+  # Builds the image sandbox containers run; exits immediately.
+  runtime:
+    profiles: [sandbox]
+    build: { context: ., dockerfile: apps/api/runtime/Dockerfile }
+    image: orbit-runtime:local
+    entrypoint: ["true"]
 
   dashboard:
     build:

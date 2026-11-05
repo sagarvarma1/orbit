@@ -35,6 +35,13 @@ export const config = {
   apiPort: int("API_PORT", 4000),
   edgePort: int("EDGE_PORT", 8080),
   host: str("HOST", "0.0.0.0"),
+  /**
+   * How the control plane reaches the edge, for cron jobs. Requests carry the deployment's
+   * hostname in the Host header. In docker-compose this is http://edge:8080.
+   */
+  edgeInternalUrl: str("ORBIT_EDGE_INTERNAL_URL", `http://127.0.0.1:${int("EDGE_PORT", 8080)}`).replace(/\/$/, ""),
+  /** CRON_ENABLED=0 stops the scheduler (e.g. on a second control plane). */
+  cronEnabled: process.env.CRON_ENABLED !== "0",
 
   /** Deployments are served at <label>.<rootDomain>. `localhost` works with no DNS. */
   rootDomain: str("ORBIT_ROOT_DOMAIN", "localhost").toLowerCase(),
@@ -44,6 +51,8 @@ export const config = {
 
   builder: str("ORBIT_BUILDER", "auto") as BuilderMode,
   buildImage: str("ORBIT_BUILD_IMAGE", "node:22-bookworm-slim"),
+  /** Image that installs Python functions' requirements (matches the runtime: Python 3.12, Debian bookworm). */
+  pythonBuildImage: str("ORBIT_PYTHON_BUILD_IMAGE", "python:3.12-slim-bookworm"),
   buildConcurrency: int("BUILD_CONCURRENCY", 2),
   buildTimeoutSeconds: int("BUILD_TIMEOUT_SECONDS", 600),
   buildMemory: str("BUILD_MEMORY", "2g"),
@@ -64,6 +73,25 @@ export const config = {
   serverMax: int("SERVER_MAX", 3),
   serverMemoryMb: int("SERVER_MEMORY_MB", 512),
   serverIdleTimeoutSeconds: int("SERVER_IDLE_TIMEOUT_SECONDS", 600),
+  /**
+   * Where deployment code runs. "container": a sandbox container per instance, started by
+   * sandboxd (production). "process": local processes under Node's permission model (development).
+   */
+  sandbox: (str("ORBIT_SANDBOX", "process") === "container" ? "container" : "process") as "container" | "process",
+  sandboxdSocket: path.join(dataDir, "sandbox", "sandboxd.sock"),
+  /** The image sandbox containers run: Node.js 22, Python 3.12 and Orbit's runtimes. */
+  runtimeImage: str("ORBIT_RUNTIME_IMAGE", "ghcr.io/sagarvarma1/orbit-runtime:latest"),
+  /** Container runtime for sandboxes: "auto" picks gVisor (runsc) when Docker has it. */
+  sandboxRuntime: str("ORBIT_SANDBOX_RUNTIME", "auto"),
+  sandboxMaxInstances: int("SANDBOX_MAX_INSTANCES", 64),
+  /** ORBIT_SANDBOX_FIREWALL=0 lets sandboxes reach private networks (not for public servers). */
+  sandboxFirewall: process.env.ORBIT_SANDBOX_FIREWALL !== "0",
+  dockerSocket: str("DOCKER_SOCKET", "/var/run/docker.sock"),
+  /** Largest single Blob upload (multipart uploads can be larger), and each store's quota (0 = none). */
+  blobMaxUploadMb: int("BLOB_MAX_UPLOAD_MB", 1024),
+  blobStoreQuotaMb: int("BLOB_STORE_QUOTA_MB", 10_240),
+  /** How the edge reaches the control plane, to forward Blob traffic (blob.<root>). */
+  apiInternalUrl: str("ORBIT_API_INTERNAL_URL", `http://127.0.0.1:${int("API_PORT", 4000)}`).replace(/\/$/, ""),
   /** Edge memory for function responses with `s-maxage` (like Vercel's CDN). 0 turns it off. */
   functionCacheMb: int("FUNCTION_CACHE_MB", 64),
 

@@ -15,6 +15,7 @@ import {
 import { compileRouting, type CompiledRouting } from "../lib/routing.js";
 import { prepareArtifact, SANDBOX_UID_BASE, type SandboxIdentity, sandboxIdentity } from "../lib/sandbox.js";
 import { FunctionCache } from "./function-cache.js";
+import { ContainerLauncher } from "./container-launcher.js";
 import { FunctionPool, FunctionTimeoutError, matchFunction } from "./functions.js";
 import { platformPage } from "./pages.js";
 import { ServerPool, type ServerPoolOptions } from "./servers.js";
@@ -56,6 +57,10 @@ export interface EdgeOptions {
   servers?: Omit<ServerPoolOptions, "log">;
   /** Writable per-deployment state; defaults to <artifactsDir>/../runtime, matching the build. */
   runtimeDir?: string;
+  /** The control plane, which serves Orbit Blob on blob.<root>; omitted = no Blob host. */
+  blobUpstream?: string;
+  /** Run deployment code in sandbox containers via sandboxd at this socket; omitted = local processes. */
+  sandboxdSocket?: string;
   /** Memory for cached function responses (`s-maxage`); 0 turns the cache off. */
   functionCacheBytes?: number;
   /** Max request body for functions (Vercel's limit is 4.5 MB). */
@@ -94,10 +99,15 @@ interface LoadedDeployment {
  */
 export function createEdgeHandler(opts: EdgeOptions) {
   const functionCache = opts.functionCacheBytes ? new FunctionCache(opts.functionCacheBytes) : null;
-  const functionPool = new FunctionPool(opts.functionWarm ?? { maxIdlePerFunction: 0, maxIdle: 0, idleTimeoutMs: 0 });
+  const containers = opts.sandboxdSocket ? new ContainerLauncher(opts.sandboxdSocket) : undefined;
+  const functionPool = new FunctionPool({
+    ...(opts.functionWarm ?? { maxIdlePerFunction: 0, maxIdle: 0, idleTimeoutMs: 0 }),
+    launcher: containers,
+  });
   const serverPool = new ServerPool({
     ...(opts.servers ?? { maxServers: 3, idleTimeoutMs: 10 * 60_000, memoryMb: 512 }),
     log: opts.log,
+    containers,
   });
   const runtimeDir = opts.runtimeDir ?? path.join(path.dirname(opts.artifactsDir), RUNTIME_DIR);
   const deployments = new Map<string, LoadedDeployment>();
@@ -183,7 +193,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
 
     const artifactDir = path.join(opts.artifactsDir, manifest.deploymentId);
     const env = readEnv(artifactDir);
-    const sandbox = sandboxFor(manifest.deploymentId);
+    const sandbox = containers ? null : sandboxFor(manifest.deploymentId);
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers))
       if (value !== undefined) headers[key] = Array.isArray(value) ? value.join(", ") : value;
@@ -198,6 +208,8 @@ export function createEdgeHandler(opts: EdgeOptions) {
         request: { method, url: url.toString(), headers, body: Buffer.concat(chunks) },
         env,
         sandbox,
+        sandboxId: opts.lookup.sandboxId?.(manifest.deploymentId) ?? null,
+        deploymentId: manifest.deploymentId,
         timeoutMs: match.route.maxDurationMs ?? opts.functionTimeoutMs,
         memoryMb: match.route.memoryMb ?? opts.functionMemoryMb,
         onLog: (stream, text) => opts.log?.(`[fn ${manifest.deploymentId}${match.route.route}] ${stream}: ${text.trimEnd()}`),
@@ -215,7 +227,8 @@ export function createEdgeHandler(opts: EdgeOptions) {
       } = cacheable
         ? await functionCache.fetch(`${manifest.deploymentId} ${url.host}${url.pathname}${url.search}`, () => invoke("GET"))
         : { response: await invoke(req.method!), hit: false, age: 0 };
-      const responseHeaders: Record<string, string> = { "cache-control": "no-store", ...out.headers };
+      const responseHeaders: Record<string, string | string[]> = { "cache-control": "no-store", ...out.headers };
+      delete responseHeaders["connection"];
       delete responseHeaders["content-encoding"];
       delete responseHeaders["transfer-encoding"];
       responseHeaders["content-length"] = String(out.body.length);
@@ -270,16 +283,18 @@ export function createEdgeHandler(opts: EdgeOptions) {
           root: path.join(artifactDir, SERVER_DIR),
           runtimeDir: path.join(runtimeDir, id),
           env: readEnv(artifactDir),
-          sandbox: sandboxFor(id),
+          sandbox: containers ? null : sandboxFor(id),
+          artifactEntry: manifest.server!.entry,
+          sandboxId: opts.lookup.sandboxId?.(id) ?? null,
         },
-        (port, cold) =>
+        (target, cold) =>
           new Promise<void>((resolve, reject) => {
             const headers: OutgoingHttpHeaders = { ...req.headers };
             headers["x-forwarded-host"] ??= req.headers.host;
             headers["x-forwarded-proto"] ??= "http";
             headers["x-forwarded-for"] ??= req.socket.remoteAddress;
             const upstream = http.request(
-              { host: "127.0.0.1", port, method: req.method, path: url.pathname + url.search, headers },
+              { ...target, method: req.method, path: url.pathname + url.search, headers },
               (response) => {
                 writeHead(res, response.statusCode ?? 502, {
                   ...response.headers,
@@ -355,9 +370,43 @@ export function createEdgeHandler(opts: EdgeOptions) {
     }
   }
 
+  /** blob.<root> is Orbit Blob, served by the control plane: forward the request as it is, streaming. */
+  function proxyBlob(req: IncomingMessage, res: ServerResponse, upstreamUrl: string): void {
+    const upstream = new URL(upstreamUrl);
+    const headers: OutgoingHttpHeaders = { ...req.headers };
+    headers["x-forwarded-for"] ??= req.socket.remoteAddress;
+    headers["x-forwarded-proto"] ??= "http";
+    const forward = http.request(
+      {
+        host: upstream.hostname,
+        port: upstream.port || 80,
+        method: req.method,
+        path: `/blob${req.url ?? "/"}`,
+        headers,
+      },
+      (response) => {
+        res.writeHead(response.statusCode ?? 502, response.headers);
+        response.pipe(res);
+      },
+    );
+    forward.on("error", (err) => {
+      opts.log?.(`[blob] ${err.message}`);
+      if (!res.headersSent)
+        sendPage(res, req.method ?? "GET", { status: 502, code: "BLOB_UNAVAILABLE", title: "Blob storage is unavailable" });
+      else res.destroy();
+    });
+    res.on("close", () => {
+      if (!res.writableFinished) forward.destroy();
+    });
+    req.pipe(forward);
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? "GET";
     res.setHeader("server", "orbit-edge");
+    if (opts.blobUpstream && hostnameFromHost(req.headers.host) === `blob.${opts.rootDomain}`) {
+      return proxyBlob(req, res, opts.blobUpstream);
+    }
     const apex = wwwRedirectTarget(hostnameFromHost(req.headers.host));
     if (apex) {
       // Like Vercel: www.<domain> sends people to <domain> unless www is a domain of its own.
@@ -477,5 +526,5 @@ export function createEdgeHandler(opts: EdgeOptions) {
     functionPool.close();
     serverPool.close();
   };
-  return Object.assign(handle, { close });
+  return Object.assign(handle, { close, containers });
 }

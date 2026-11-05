@@ -15,6 +15,8 @@ export interface RunOptions {
   rootDirectory: string;
   command: string;
   env: Record<string, string>;
+  /** Docker image for this step (defaults to the build image). Ignored by the process runner. */
+  image?: string;
   onOutput: (stream: "stdout" | "stderr", chunk: string) => void;
   signal: AbortSignal;
 }
@@ -135,6 +137,7 @@ export class DockerRunner implements CommandRunner {
       npm_config_cache: "/cache/npm",
       YARN_CACHE_FOLDER: "/cache/yarn",
       COREPACK_HOME: "/cache/corepack",
+      PIP_CACHE_DIR: "/cache/pip",
     }).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
     const args = [
       "run",
@@ -156,7 +159,7 @@ export class DockerRunner implements CommandRunner {
       "-w",
       path.posix.join("/workspace", opts.rootDirectory),
       ...envArgs,
-      this.config.buildImage,
+      opts.image ?? this.config.buildImage,
       "sh",
       "-c",
       script,

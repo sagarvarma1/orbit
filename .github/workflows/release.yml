@@ -21,6 +21,8 @@ jobs:
             dockerfile: apps/api/Dockerfile
           - name: dashboard
             dockerfile: apps/dashboard/Dockerfile
+          - name: runtime
+            dockerfile: apps/api/runtime/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
