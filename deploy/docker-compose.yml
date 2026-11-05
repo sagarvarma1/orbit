@@ -50,6 +50,8 @@ services:
       <<: *orbit-env
       # Deployment code runs in sandbox containers started by sandboxd; the edge only routes to them.
       ORBIT_SANDBOX: container
+      # Orbit Blob (blob.<root>) is served by the control plane.
+      ORBIT_API_INTERNAL_URL: http://api:4000
     volumes:
       - ${ORBIT_DATA_DIR:-/opt/orbit/data}:${ORBIT_DATA_DIR:-/opt/orbit/data}
     depends_on: [sandboxd]

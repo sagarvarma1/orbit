@@ -82,6 +82,29 @@ function edge(host, urlPath = "/", headers = {}) {
   });
 }
 
+/** Any method, with a body, to the edge (or to blob.localhost when host is "blob"). */
+function edgeRequest(method, host, urlPath, { headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: EDGE_PORT,
+        method,
+        path: urlPath,
+        headers: { host: `${host}.localhost:${EDGE_PORT}`, ...headers },
+      },
+      (res) => {
+        let text = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (text += c));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: text }));
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
 async function waitFor(deploymentId, statuses = ["ready", "error", "canceled"], timeoutMs = 300_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -278,6 +301,32 @@ const pythonRepo = makeRepo("python", {
     "from urllib.parse import parse_qs\n\ndef app(environ, start_response):\n" +
     "    start_response('200 OK', [('content-type', 'text/plain')])\n" +
     "    return [('item ' + parse_qs(environ['QUERY_STRING'])['id'][0]).encode()]\n",
+});
+
+/** Uses the real @vercel/blob SDK from a function: server uploads, and browser uploads via handleUpload. */
+const blobRepo = makeRepo("blob", {
+  "index.html": "<h1>blob</h1>",
+  "package.json": JSON.stringify({ name: "blob-app", private: true, dependencies: { "@vercel/blob": "2.8.2" } }),
+  "api/upload.mjs": `import { put, list } from "@vercel/blob";
+export async function POST(request) {
+  const blob = await put("e2e/note.txt", await request.text(), { access: "public", allowOverwrite: true });
+  const listed = await list({ prefix: "e2e/" });
+  return Response.json({ url: blob.url, count: listed.blobs.length });
+}`,
+  "api/handle-upload.mjs": `import { handleUpload } from "@vercel/blob/client";
+import { put } from "@vercel/blob";
+export async function POST(request) {
+  const body = await request.json();
+  const result = await handleUpload({
+    body,
+    request,
+    onBeforeGenerateToken: async () => ({ allowedContentTypes: ["text/plain"], tokenPayload: JSON.stringify({ user: "e2e" }) }),
+    onUploadCompleted: async ({ blob, tokenPayload }) => {
+      await put("e2e/completed.json", JSON.stringify({ url: blob.url, tokenPayload }), { access: "public", allowOverwrite: true });
+    },
+  });
+  return Response.json(result);
+}`,
 });
 
 const badCronRepo = makeRepo("bad-cron", {
@@ -512,6 +561,71 @@ async function main() {
     "Python dependencies restored from the build cache on redeploy",
     pyRedeployLogs.some((t) => t.startsWith("Restored Python dependencies from build cache")),
   );
+
+  console.log("\nBlob storage (@vercel/blob SDK)");
+  const { store } = await api("POST", "/api/blob-stores", { name: "e2e uploads" });
+  check("blob store created with a Vercel-format token", store.token?.startsWith(`vercel_blob_rw_${store.id}_`));
+  const blobApp = await api("POST", "/api/projects", { repoUrl: `file://${blobRepo}`, name: "blobapp" });
+  await waitFor(blobApp.deployment.id);
+  await api("PUT", `/api/blob-stores/${store.id}/connections/blobapp`, { targets: ["production", "preview"] });
+  // Like Vercel, a connected store's token reaches the next deployment.
+  const blobRedeploy = await api("POST", `/api/deployments/${blobApp.deployment.id}/redeploy`, {});
+  const blobDeployment = await waitFor(blobRedeploy.deployment.id);
+  check("blob app deployed with the store connected", blobDeployment.status === "ready", blobDeployment.errorMessage ?? "");
+  // In sandbox containers, blob.localhost is the container's own loopback; on a server blob.<root>
+  // is a public hostname. So functions calling Blob are only checked in process mode.
+  if (!CONTAINERS) {
+    const uploaded = await edgeRequest("POST", "blobapp", "/api/upload", { body: "hello from a function" });
+    const uploadedJson = JSON.parse(uploaded.body || "{}");
+    check(
+      "a function uploads with put() and lists with list()",
+      uploaded.status === 200 && uploadedJson.count === 1,
+      uploaded.body.slice(0, 300),
+    );
+    const blobPath = uploadedJson.url ? new URL(uploadedJson.url).pathname : "/";
+    const served = await edgeRequest("GET", "blob", blobPath);
+    check(
+      "the blob is served from blob.<root>",
+      served.status === 200 && served.body === "hello from a function",
+      `${served.status}`,
+    );
+    const tokenRes = await edgeRequest("POST", "blobapp", "/api/handle-upload", {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "blob.generate-client-token",
+        payload: { pathname: "e2e/client.txt", clientPayload: null, multipart: false },
+      }),
+    });
+    const clientToken = JSON.parse(tokenRes.body || "{}").clientToken ?? "";
+    check(
+      "handleUpload issues a client token",
+      clientToken.startsWith(`vercel_blob_client_${store.id}_`),
+      tokenRes.body.slice(0, 300),
+    );
+    const browserPut = await edgeRequest("PUT", "blob", "/api/?pathname=e2e%2Fclient.txt", {
+      headers: {
+        authorization: `Bearer ${clientToken}`,
+        "x-vercel-blob-access": "public",
+        "x-content-type": "text/plain",
+        "x-api-version": "13",
+        origin: "http://blobapp.localhost",
+      },
+      body: "uploaded from the browser",
+    });
+    check("a browser upload with the client token succeeds", browserPut.status === 200, browserPut.body.slice(0, 300));
+    check("blob API allows browser origins (CORS)", browserPut.headers["access-control-allow-origin"] === "*");
+    let completed = null;
+    for (let i = 0; i < 40 && !completed; i++) {
+      const res = await edgeRequest("GET", "blob", `/${store.id}/e2e/completed.json`);
+      if (res.status === 200) completed = JSON.parse(res.body);
+      else await sleep(250);
+    }
+    check(
+      "onUploadCompleted runs with the signed callback",
+      completed?.tokenPayload === JSON.stringify({ user: "e2e" }) && completed?.url?.endsWith("/e2e/client.txt"),
+      JSON.stringify(completed),
+    );
+  }
 
   console.log("\nPush-to-deploy: webhook push to a feature branch creates a preview");
   git(demoRepo, "checkout", "-qb", "feature/v2");

@@ -57,6 +57,8 @@ export interface EdgeOptions {
   servers?: Omit<ServerPoolOptions, "log">;
   /** Writable per-deployment state; defaults to <artifactsDir>/../runtime, matching the build. */
   runtimeDir?: string;
+  /** The control plane, which serves Orbit Blob on blob.<root>; omitted = no Blob host. */
+  blobUpstream?: string;
   /** Run deployment code in sandbox containers via sandboxd at this socket; omitted = local processes. */
   sandboxdSocket?: string;
   /** Memory for cached function responses (`s-maxage`); 0 turns the cache off. */
@@ -368,9 +370,43 @@ export function createEdgeHandler(opts: EdgeOptions) {
     }
   }
 
+  /** blob.<root> is Orbit Blob, served by the control plane: forward the request as it is, streaming. */
+  function proxyBlob(req: IncomingMessage, res: ServerResponse, upstreamUrl: string): void {
+    const upstream = new URL(upstreamUrl);
+    const headers: OutgoingHttpHeaders = { ...req.headers };
+    headers["x-forwarded-for"] ??= req.socket.remoteAddress;
+    headers["x-forwarded-proto"] ??= "http";
+    const forward = http.request(
+      {
+        host: upstream.hostname,
+        port: upstream.port || 80,
+        method: req.method,
+        path: `/blob${req.url ?? "/"}`,
+        headers,
+      },
+      (response) => {
+        res.writeHead(response.statusCode ?? 502, response.headers);
+        response.pipe(res);
+      },
+    );
+    forward.on("error", (err) => {
+      opts.log?.(`[blob] ${err.message}`);
+      if (!res.headersSent)
+        sendPage(res, req.method ?? "GET", { status: 502, code: "BLOB_UNAVAILABLE", title: "Blob storage is unavailable" });
+      else res.destroy();
+    });
+    res.on("close", () => {
+      if (!res.writableFinished) forward.destroy();
+    });
+    req.pipe(forward);
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? "GET";
     res.setHeader("server", "orbit-edge");
+    if (opts.blobUpstream && hostnameFromHost(req.headers.host) === `blob.${opts.rootDomain}`) {
+      return proxyBlob(req, res, opts.blobUpstream);
+    }
     const apex = wwwRedirectTarget(hostnameFromHost(req.headers.host));
     if (apex) {
       // Like Vercel: www.<domain> sends people to <domain> unless www is a domain of its own.

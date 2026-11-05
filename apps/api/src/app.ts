@@ -11,11 +11,20 @@ import { githubRoutes } from "./routes/github.js";
 import { inspectRoutes } from "./routes/inspect.js";
 import { authRoutes } from "./routes/auth.js";
 import { cronRoutes } from "./routes/crons.js";
+import { blobApiRoutes } from "./routes/blob-api.js";
+import { blobStoreRoutes } from "./routes/blob-stores.js";
+import { BlobService } from "./services/blob.js";
 import { projectRoutes } from "./routes/projects.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
-export async function buildApp(base: Omit<AppContext, "access"> & { access?: Access }): Promise<FastifyInstance> {
-  const ctx: AppContext = { ...base, access: base.access ?? new Access(base.repo, base.githubApp, base.config) };
+export async function buildApp(
+  base: Omit<AppContext, "access" | "blob"> & { access?: Access; blob?: BlobService },
+): Promise<FastifyInstance> {
+  const ctx: AppContext = {
+    ...base,
+    access: base.access ?? new Access(base.repo, base.githubApp, base.config),
+    blob: base.blob ?? new BlobService(base.repo, base.config),
+  };
   const pretty = process.env.NODE_ENV !== "production";
   const app = Fastify({
     logger: {
@@ -31,10 +40,18 @@ export async function buildApp(base: Omit<AppContext, "access"> & { access?: Acc
   // Only the dashboard may call the API from a browser on another origin (in development the
   // dashboard runs on :3000 and the API on :4000). In production both share one origin.
   const dashboardOrigin = new URL(ctx.config.dashboardUrl).origin;
+  // Blob is token-authenticated and called from any origin (browser uploads), like Vercel's API.
   await app.register(cors, {
-    origin: (origin, cb) => cb(null, origin === dashboardOrigin),
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    delegator: (req, cb) => {
+      if (req.url?.startsWith("/blob/")) {
+        return cb(null, { origin: "*", methods: ["GET", "HEAD", "PUT", "POST"], allowedHeaders: "*", maxAge: 86400 });
+      }
+      cb(null, {
+        origin: req.headers.origin === dashboardOrigin,
+        credentials: true,
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+      });
+    },
   });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -64,6 +81,7 @@ export async function buildApp(base: Omit<AppContext, "access"> & { access?: Acc
     githubApp: ctx.githubApp.configured,
     buildCache: ctx.config.buildCache,
     gitPollIntervalSeconds: ctx.config.gitPollIntervalSeconds,
+    blobApiUrl: ctx.blob.apiUrl,
     presets: Object.values(PRESETS),
   }));
 
@@ -74,5 +92,7 @@ export async function buildApp(base: Omit<AppContext, "access"> & { access?: Acc
   domainRoutes(app, ctx);
   githubRoutes(app, ctx);
   cronRoutes(app, ctx);
+  blobStoreRoutes(app, ctx);
+  blobApiRoutes(app, ctx, ctx.blob);
   return app;
 }

@@ -45,6 +45,8 @@ services:
       # "container" runs deployment code in sandbox containers (Linux hosts; start with
       # `--profile sandbox`). Docker Desktop's file sharing can't carry the sandboxes' unix sockets.
       ORBIT_SANDBOX: ${ORBIT_SANDBOX:-process}
+      # Orbit Blob (blob.<root>) is served by the control plane.
+      ORBIT_API_INTERNAL_URL: http://api:4000
     volumes:
       - ./data:/data
     ports: ["8080:8080"]

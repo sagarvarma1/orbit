@@ -87,6 +87,11 @@ export const config = {
   /** ORBIT_SANDBOX_FIREWALL=0 lets sandboxes reach private networks (not for public servers). */
   sandboxFirewall: process.env.ORBIT_SANDBOX_FIREWALL !== "0",
   dockerSocket: str("DOCKER_SOCKET", "/var/run/docker.sock"),
+  /** Largest single Blob upload (multipart uploads can be larger), and each store's quota (0 = none). */
+  blobMaxUploadMb: int("BLOB_MAX_UPLOAD_MB", 1024),
+  blobStoreQuotaMb: int("BLOB_STORE_QUOTA_MB", 10_240),
+  /** How the edge reaches the control plane, to forward Blob traffic (blob.<root>). */
+  apiInternalUrl: str("ORBIT_API_INTERNAL_URL", `http://127.0.0.1:${int("API_PORT", 4000)}`).replace(/\/$/, ""),
   /** Edge memory for function responses with `s-maxage` (like Vercel's CDN). 0 turns it off. */
   functionCacheMb: int("FUNCTION_CACHE_MB", 64),
 

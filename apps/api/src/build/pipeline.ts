@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { type CommitInfo, shallowCheckout } from "./git.js";
 import { type CronJob, parseCronsConfig } from "../lib/cron.js";
 import { lockArtifact } from "../lib/sandbox.js";
+import { publicUrl } from "../lib/urls.js";
 import type { CommandRunner } from "./runner.js";
 
 /** A failure the user caused (bad command, missing output). Shown verbatim, no stack. */
@@ -334,6 +335,11 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       ORBIT_GIT_COMMIT_REF: deployment.branch,
       ORBIT_GIT_COMMIT_SHA: commit.sha,
       ORBIT_GIT_COMMIT_MESSAGE: commit.message,
+      // The @vercel/blob SDK talks to Orbit Blob instead of Vercel's API (also in the browser, for client uploads).
+      VERCEL_BLOB_API_URL: `${publicUrl(config, "blob")}/api`,
+      NEXT_PUBLIC_VERCEL_BLOB_API_URL: `${publicUrl(config, "blob")}/api`,
+      // Where handleUpload's onUploadCompleted callback goes: this deployment.
+      VERCEL_BLOB_CALLBACK_URL: ctx.url,
       // Next.js reads this as the default for `output`, so apps build a standalone server without config changes.
       ...(settings.server ? { NEXT_PRIVATE_STANDALONE: "1", NEXT_TELEMETRY_DISABLED: "1" } : {}),
       ...ctx.env,

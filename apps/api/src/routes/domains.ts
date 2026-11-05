@@ -119,6 +119,8 @@ export function domainRoutes(app: FastifyInstance, ctx: AppContext): void {
       .replace(/\.$/, "");
     reply.header("cache-control", "no-store");
     if (host && host === appHost(ctx.config)) return { allowed: true };
+    // Orbit Blob's host.
+    if (host === `blob.${ctx.config.rootDomain}`) return { allowed: true };
     if (ctx.repo.getDomain(host)) return { allowed: true };
     // www.<domain> redirects to a custom domain at the edge, so it needs a certificate too.
     if (host.startsWith("www.") && ctx.repo.getDomain(host.slice(4))) return { allowed: true };

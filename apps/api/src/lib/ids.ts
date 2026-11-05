@@ -33,7 +33,21 @@ export function slugify(input: string): string {
 }
 
 /** Names that would collide with dashboard routes or common infrastructure hostnames. */
-const RESERVED_NAMES = new Set(["new", "api", "www", "app", "dashboard", "edge", "settings", "login", "setup", "logout"]);
+const RESERVED_NAMES = new Set([
+  "new",
+  "api",
+  "www",
+  "app",
+  "dashboard",
+  "edge",
+  "settings",
+  "login",
+  "setup",
+  "logout",
+  // blob.<root> serves Orbit Blob.
+  "blob",
+  "storage",
+]);
 
 export function isValidProjectName(name: string): boolean {
   return PROJECT_NAME_RE.test(name) && !name.startsWith("dpl-") && !name.includes("-git-") && !RESERVED_NAMES.has(name);

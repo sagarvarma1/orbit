@@ -78,6 +78,7 @@ const handle = createEdgeHandler({
     idleTimeoutMs: config.functionIdleTimeoutSeconds * 1000,
   },
   log: (message) => console.log(message),
+  blobUpstream: config.apiInternalUrl,
   ...(containerMode ? { sandboxdSocket: config.sandboxdSocket } : {}),
 });
 
