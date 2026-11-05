@@ -13,6 +13,8 @@ import { branchAliasLabel } from "./lib/urls.js";
 
 const repo = new Repo(openDb(config.dbPath));
 
+const containerMode = config.sandbox === "container";
+
 // Deployment code runs as per-project users (Linux, as root); keep it away from Orbit's own state.
 const blocked = sandboxAvailable() ? blockingParent(config.dataDir) : null;
 if (blocked) {
@@ -21,7 +23,10 @@ if (blocked) {
     `Sandbox: per-project users OFF: other users can't pass through ${blocked} to reach the data directory. Run \`chmod o+x ${blocked}\` and restart.`,
   );
 }
-if (sandboxAvailable()) {
+if (containerMode) {
+  console.log(`Sandbox: containers via sandboxd (${config.sandboxdSocket})`);
+  if (sandboxAvailable()) lockDataDir(config);
+} else if (sandboxAvailable()) {
   lockDataDir(config);
   const firewall = installFirewall();
   console.log(`Sandbox: per-project users on · firewall ${firewall.ok ? "on" : "OFF"}: ${firewall.detail}`);
@@ -29,6 +34,11 @@ if (sandboxAvailable()) {
     console.warn("  Give the edge container NET_ADMIN (see deploy/docker-compose.yml) to block private networks.");
 } else {
   console.log("Sandbox: Node permission model only (per-project users need Linux and root)");
+}
+if (!containerMode && config.rootDomain !== "localhost") {
+  console.warn(
+    "Sandbox: deployment code runs as local processes. On a public server set ORBIT_SANDBOX=container and run sandboxd (see deploy/docker-compose.yml).",
+  );
 }
 
 /** `<deploymentId>` is an immutable preview; anything else is an alias (production or branch). */
@@ -68,7 +78,27 @@ const handle = createEdgeHandler({
     idleTimeoutMs: config.functionIdleTimeoutSeconds * 1000,
   },
   log: (message) => console.log(message),
+  ...(containerMode ? { sandboxdSocket: config.sandboxdSocket } : {}),
 });
+
+/** Sandboxes from a previous edge process are orphans: nothing routes to them any more. */
+async function connectSandboxd(): Promise<void> {
+  const containers = handle.containers!;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await containers.reset();
+      const health = await containers.health();
+      console.log(
+        `Sandbox: connected to sandboxd · runtime ${health.runtime} · firewall ${health.firewall.ok ? "on" : "OFF"}: ${health.firewall.detail}`,
+      );
+      return;
+    } catch (err) {
+      if (attempt % 10 === 0) console.warn(`Sandbox: waiting for sandboxd (${(err as Error).message})`);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+if (containerMode) void connectSandboxd();
 
 const logRequests = process.env.EDGE_LOG_REQUESTS === "1";
 

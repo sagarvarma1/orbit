@@ -43,6 +43,27 @@ if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; t
 fi
 docker info >/dev/null 2>&1 || fail "Docker is installed but the daemon isn't running (try: systemctl start docker)."
 
+# gVisor gives every sandbox container its own kernel, like Vercel's microVMs. Without it, deployment
+# code still runs in locked-down containers, but they share the host's kernel.
+if ! docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+  ask INSTALL_GVISOR "Install gVisor so deployment code runs with its own kernel? (recommended) (y/n)" "y"
+  if [ "$INSTALL_GVISOR" = "y" ]; then
+    ARCH="$(uname -m)"
+    GVISOR="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+    TMP="$(mktemp -d)"
+    for f in runsc runsc.sha512 containerd-shim-runsc-v1 containerd-shim-runsc-v1.sha512; do
+      curl -fsSL "$GVISOR/$f" -o "$TMP/$f" || fail "Couldn't download gVisor for ${ARCH}."
+    done
+    (cd "$TMP" && sha512sum -c runsc.sha512 containerd-shim-runsc-v1.sha512 >/dev/null) || fail "gVisor checksum mismatch."
+    install -m 0755 "$TMP/runsc" "$TMP/containerd-shim-runsc-v1" /usr/local/bin/
+    rm -rf "$TMP"
+    # Sandboxes serve requests on unix sockets in bind mounts, which gVisor allows with --host-uds.
+    /usr/local/bin/runsc install -- --host-uds=create >/dev/null
+    systemctl restart docker
+    info "gVisor installed (runtime: runsc)."
+  fi
+fi
+
 # 2. Settings ---------------------------------------------------------------------------
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 echo

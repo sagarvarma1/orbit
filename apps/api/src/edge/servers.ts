@@ -1,9 +1,13 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { prepareRuntimeDir, type SandboxIdentity } from "../lib/sandbox.js";
-import { deprioritize } from "./functions.js";
+import type { ContainerLauncher } from "./container-launcher.js";
+import { deprioritize } from "./launcher.js";
+
+/** How to reach a running server: a loopback port (local process) or a unix socket (sandbox). */
+export type ServerTarget = { host: string; port: number } | { socketPath: string };
 
 export interface ServerPoolOptions {
   /** Servers kept running at once; the least recently used idle one stops to make room. */
@@ -14,6 +18,8 @@ export interface ServerPoolOptions {
   /** How long a server may take to start accepting connections. */
   startTimeoutMs?: number;
   log?: (message: string) => void;
+  /** Run servers in sandbox containers instead of local processes. */
+  containers?: ContainerLauncher;
 }
 
 export interface StartOptions {
@@ -27,15 +33,17 @@ export interface StartOptions {
   env: Record<string, string>;
   /** Run as this OS user (Linux, when the edge is root). */
   sandbox?: SandboxIdentity | null;
+  /** Entry relative to the artifact ("server/server.js") and the project's sandbox number, for containers. */
+  artifactEntry?: string;
+  sandboxId?: number | null;
 }
 
 export class ServerStartError extends Error {}
 
 interface Running {
   deploymentId: string;
-  child: ChildProcess;
-  port: number;
-  ready: Promise<number>;
+  kill: (signal: NodeJS.Signals) => void;
+  ready: Promise<ServerTarget>;
   inflight: number;
   lastUsed: number;
   idleTimer: NodeJS.Timeout | null;
@@ -86,7 +94,7 @@ export class ServerPool {
    * Runs `fn` with the port of a ready server for the deployment, starting one if needed.
    * `fn` resolves when the response is finished, so the server isn't stopped mid-request.
    */
-  async use<T>(start: StartOptions, fn: (port: number, cold: boolean) => Promise<T>): Promise<T> {
+  async use<T>(start: StartOptions, fn: (target: ServerTarget, cold: boolean) => Promise<T>): Promise<T> {
     let server = this.servers.get(start.deploymentId);
     const cold = !server;
     if (!server) server = await this.start(start);
@@ -97,8 +105,8 @@ export class ServerPool {
       server.idleTimer = null;
     }
     try {
-      const port = await server.ready;
-      return await fn(port, cold);
+      const target = await server.ready;
+      return await fn(target, cold);
     } finally {
       server.inflight -= 1;
       server.lastUsed = Date.now();
@@ -116,6 +124,7 @@ export class ServerPool {
 
   private async start(start: StartOptions): Promise<Running> {
     this.makeRoom();
+    if (this.opts.containers) return this.startContainer(start, this.opts.containers);
     const port = await freePort();
     // Another request may have started it while we waited for a port.
     const existing = this.servers.get(start.deploymentId);
@@ -156,9 +165,8 @@ export class ServerPool {
 
     const server: Running = {
       deploymentId: start.deploymentId,
-      child,
-      port,
-      ready: Promise.resolve(port),
+      kill: (signal) => child.kill(signal),
+      ready: Promise.resolve({ host: "127.0.0.1", port }),
       inflight: 0,
       lastUsed: Date.now(),
       idleTimer: null,
@@ -192,13 +200,46 @@ export class ServerPool {
       const deadline = Date.now() + (this.opts.startTimeoutMs ?? 20_000);
       while (Date.now() < deadline) {
         if (server.stopped) return exited;
-        if (await canConnect(port)) return port;
+        if (await canConnect(port)) return { host: "127.0.0.1", port };
         await Promise.race([new Promise((r) => setTimeout(r, 50)), exited]);
       }
       this.stop(server);
       throw new ServerStartError("The server didn't start listening in time");
     })();
     server.ready.catch(() => this.stop(server));
+    this.servers.set(start.deploymentId, server);
+    return server;
+  }
+
+  /** A server in a sandbox container; the edge reaches it over the instance's unix socket. */
+  private startContainer(start: StartOptions, containers: ContainerLauncher): Running {
+    const launched = containers.launchServer({
+      deploymentId: start.deploymentId,
+      entry: start.artifactEntry ?? "",
+      memoryMb: this.opts.memoryMb,
+      sandboxId: start.sandboxId ?? null,
+    });
+    const server: Running = {
+      deploymentId: start.deploymentId,
+      kill: () => launched.kill(),
+      ready: launched.ready.then(() => ({ socketPath: launched.socketPath })),
+      inflight: 0,
+      lastUsed: Date.now(),
+      idleTimer: null,
+      output: [],
+      stopped: false,
+    };
+    void launched.exited.then((reason) => {
+      server.stopped = true;
+      if (this.servers.get(start.deploymentId) === server) this.servers.delete(start.deploymentId);
+      if (server.idleTimer) clearTimeout(server.idleTimer);
+      this.opts.log?.(`[server ${start.deploymentId}] ${reason.split("\n")[0]}`);
+    });
+    server.ready = server.ready.catch((err: Error) => {
+      this.stop(server);
+      throw new ServerStartError(err.message);
+    });
+    server.ready.catch(() => {});
     this.servers.set(start.deploymentId, server);
     return server;
   }
@@ -218,7 +259,7 @@ export class ServerPool {
     if (server.idleTimer) clearTimeout(server.idleTimer);
     if (server.stopped) return;
     server.stopped = true;
-    server.child.kill("SIGTERM");
-    setTimeout(() => server.child.kill("SIGKILL"), 3000).unref();
+    server.kill("SIGTERM");
+    setTimeout(() => server.kill("SIGKILL"), 3000).unref();
   }
 }

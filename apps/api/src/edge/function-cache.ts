@@ -9,11 +9,15 @@ const CACHEABLE_STATUS = new Set([200, 203, 204, 301, 308, 404, 410]);
  */
 export function sharedMaxAge(res: FunctionResponse): number {
   if (!CACHEABLE_STATUS.has(res.status) || res.headers["set-cookie"]) return 0;
-  const vary = res.headers["vary"];
+  const header = (name: string) => {
+    const value = res.headers[name];
+    return Array.isArray(value) ? value.join(", ") : value;
+  };
+  const vary = header("vary");
   if (vary && vary.split(",").some((v) => v.trim().toLowerCase() !== "accept-encoding")) return 0;
 
-  const cdn = res.headers["cdn-cache-control"];
-  const directives = (cdn ?? res.headers["cache-control"] ?? "").toLowerCase();
+  const cdn = header("cdn-cache-control");
+  const directives = (cdn ?? header("cache-control") ?? "").toLowerCase();
   if (/(^|[\s,])(private|no-store|no-cache)([\s,=]|$)/.test(directives)) return 0;
   const match = (cdn ? /(?:^|[\s,])(?:s-maxage|max-age)=(\d+)/ : /(?:^|[\s,])s-maxage=(\d+)/).exec(directives);
   return match ? Number(match[1]) : 0;

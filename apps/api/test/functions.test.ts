@@ -72,8 +72,8 @@ describe("function bundles", () => {
     });
 
     expect(routes).toEqual([
-      { route: "/api/bad", file: "functions/api/bad.mjs", memoryMb: 1024, maxDurationMs: 10_000 },
-      { route: "/api/view", file: "functions/api/view.mjs", memoryMb: 1024, maxDurationMs: 10_000 },
+      { route: "/api/bad", file: "functions/api/bad.mjs", runtime: "node", memoryMb: 1024, maxDurationMs: 10_000 },
+      { route: "/api/view", file: "functions/api/view.mjs", runtime: "node", memoryMb: 1024, maxDurationMs: 10_000 },
     ]);
     expect(includedFiles).toBe(2);
     expect(fs.existsSync(path.join(dir, "artifact", "functions", "dist", "index.html"))).toBe(false);
@@ -185,5 +185,53 @@ describe("warm function instances", () => {
     expect(await until(() => pool.size === 1)).toBe(true);
     expect(await call(one)).toMatchObject({ warm: false }); // evicted as the oldest idle instance
     expect(await until(() => pool.size === 0)).toBe(true);
+  });
+});
+
+describe("Python function bundles", () => {
+  let dir: string;
+  const write = (rel: string, content: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, "project", rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, "project", rel), content);
+  };
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-py-"));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it("routes .py files with the Python runtime and ships the project's files, minus excludeFiles", async () => {
+    write("api/hello.js", "export default (req, res) => res.send('js');");
+    write("api/users/[id].py", "def app(e, s): pass");
+    write("api/_helpers.py", "X = 1");
+    write("api/__init__.py", "");
+    write("lib/db.py", "DB = 1");
+    write("data/big.csv", "1,2,3");
+    write("requirements.txt", "flask");
+    write(".env", "SECRET=1");
+    write("node_modules/x/index.js", "");
+    write(".venv/lib/x.py", "");
+    write("api/__pycache__/x.pyc", "");
+    const out = path.join(dir, "artifact", "functions");
+    const result = await bundleFunctions(path.join(dir, "project"), out, {
+      config: { "api/**/*.py": { excludeFiles: "data/**", memory: 512 } },
+      maxMemoryMb: 1024,
+      maxDurationSeconds: 60,
+    });
+    expect(result.python).toBe(true);
+    expect(result.routes).toEqual([
+      { route: "/api/hello", file: "functions/api/hello.mjs", runtime: "node" },
+      { route: "/api/users/[id]", file: "functions/api/users/[id].py", runtime: "python", memoryMb: 512 },
+    ]);
+    const has = (rel: string) => fs.existsSync(path.join(out, rel));
+    expect(["api/users/[id].py", "api/_helpers.py", "lib/db.py", "requirements.txt", "api/hello.mjs"].every(has)).toBe(true);
+    expect([".env", "node_modules/x/index.js", ".venv/lib/x.py", "data/big.csv", "api/__pycache__/x.pyc"].some(has)).toBe(false);
+  });
+
+  it("rejects two files serving one route", async () => {
+    write("api/hello.js", "export default () => {}");
+    write("api/hello.py", "def app(e, s): pass");
+    await expect(
+      bundleFunctions(path.join(dir, "project"), path.join(dir, "out"), { maxMemoryMb: 1024, maxDurationSeconds: 60 }),
+    ).rejects.toThrow(/api\/hello.js and api\/hello.py both define \/api\/hello/);
   });
 });

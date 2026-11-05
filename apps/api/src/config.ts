@@ -51,6 +51,8 @@ export const config = {
 
   builder: str("ORBIT_BUILDER", "auto") as BuilderMode,
   buildImage: str("ORBIT_BUILD_IMAGE", "node:22-bookworm-slim"),
+  /** Image that installs Python functions' requirements (matches the runtime: Python 3.12, Debian bookworm). */
+  pythonBuildImage: str("ORBIT_PYTHON_BUILD_IMAGE", "python:3.12-slim-bookworm"),
   buildConcurrency: int("BUILD_CONCURRENCY", 2),
   buildTimeoutSeconds: int("BUILD_TIMEOUT_SECONDS", 600),
   buildMemory: str("BUILD_MEMORY", "2g"),
@@ -71,6 +73,20 @@ export const config = {
   serverMax: int("SERVER_MAX", 3),
   serverMemoryMb: int("SERVER_MEMORY_MB", 512),
   serverIdleTimeoutSeconds: int("SERVER_IDLE_TIMEOUT_SECONDS", 600),
+  /**
+   * Where deployment code runs. "container": a sandbox container per instance, started by
+   * sandboxd (production). "process": local processes under Node's permission model (development).
+   */
+  sandbox: (str("ORBIT_SANDBOX", "process") === "container" ? "container" : "process") as "container" | "process",
+  sandboxdSocket: path.join(dataDir, "sandbox", "sandboxd.sock"),
+  /** The image sandbox containers run: Node.js 22, Python 3.12 and Orbit's runtimes. */
+  runtimeImage: str("ORBIT_RUNTIME_IMAGE", "ghcr.io/sagarvarma1/orbit-runtime:latest"),
+  /** Container runtime for sandboxes: "auto" picks gVisor (runsc) when Docker has it. */
+  sandboxRuntime: str("ORBIT_SANDBOX_RUNTIME", "auto"),
+  sandboxMaxInstances: int("SANDBOX_MAX_INSTANCES", 64),
+  /** ORBIT_SANDBOX_FIREWALL=0 lets sandboxes reach private networks (not for public servers). */
+  sandboxFirewall: process.env.ORBIT_SANDBOX_FIREWALL !== "0",
+  dockerSocket: str("DOCKER_SOCKET", "/var/run/docker.sock"),
   /** Edge memory for function responses with `s-maxage` (like Vercel's CDN). 0 turns it off. */
   functionCacheMb: int("FUNCTION_CACHE_MB", 64),
 

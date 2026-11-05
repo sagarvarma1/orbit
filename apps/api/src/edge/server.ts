@@ -15,6 +15,7 @@ import {
 import { compileRouting, type CompiledRouting } from "../lib/routing.js";
 import { prepareArtifact, SANDBOX_UID_BASE, type SandboxIdentity, sandboxIdentity } from "../lib/sandbox.js";
 import { FunctionCache } from "./function-cache.js";
+import { ContainerLauncher } from "./container-launcher.js";
 import { FunctionPool, FunctionTimeoutError, matchFunction } from "./functions.js";
 import { platformPage } from "./pages.js";
 import { ServerPool, type ServerPoolOptions } from "./servers.js";
@@ -56,6 +57,8 @@ export interface EdgeOptions {
   servers?: Omit<ServerPoolOptions, "log">;
   /** Writable per-deployment state; defaults to <artifactsDir>/../runtime, matching the build. */
   runtimeDir?: string;
+  /** Run deployment code in sandbox containers via sandboxd at this socket; omitted = local processes. */
+  sandboxdSocket?: string;
   /** Memory for cached function responses (`s-maxage`); 0 turns the cache off. */
   functionCacheBytes?: number;
   /** Max request body for functions (Vercel's limit is 4.5 MB). */
@@ -94,10 +97,15 @@ interface LoadedDeployment {
  */
 export function createEdgeHandler(opts: EdgeOptions) {
   const functionCache = opts.functionCacheBytes ? new FunctionCache(opts.functionCacheBytes) : null;
-  const functionPool = new FunctionPool(opts.functionWarm ?? { maxIdlePerFunction: 0, maxIdle: 0, idleTimeoutMs: 0 });
+  const containers = opts.sandboxdSocket ? new ContainerLauncher(opts.sandboxdSocket) : undefined;
+  const functionPool = new FunctionPool({
+    ...(opts.functionWarm ?? { maxIdlePerFunction: 0, maxIdle: 0, idleTimeoutMs: 0 }),
+    launcher: containers,
+  });
   const serverPool = new ServerPool({
     ...(opts.servers ?? { maxServers: 3, idleTimeoutMs: 10 * 60_000, memoryMb: 512 }),
     log: opts.log,
+    containers,
   });
   const runtimeDir = opts.runtimeDir ?? path.join(path.dirname(opts.artifactsDir), RUNTIME_DIR);
   const deployments = new Map<string, LoadedDeployment>();
@@ -183,7 +191,7 @@ export function createEdgeHandler(opts: EdgeOptions) {
 
     const artifactDir = path.join(opts.artifactsDir, manifest.deploymentId);
     const env = readEnv(artifactDir);
-    const sandbox = sandboxFor(manifest.deploymentId);
+    const sandbox = containers ? null : sandboxFor(manifest.deploymentId);
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers))
       if (value !== undefined) headers[key] = Array.isArray(value) ? value.join(", ") : value;
@@ -198,6 +206,8 @@ export function createEdgeHandler(opts: EdgeOptions) {
         request: { method, url: url.toString(), headers, body: Buffer.concat(chunks) },
         env,
         sandbox,
+        sandboxId: opts.lookup.sandboxId?.(manifest.deploymentId) ?? null,
+        deploymentId: manifest.deploymentId,
         timeoutMs: match.route.maxDurationMs ?? opts.functionTimeoutMs,
         memoryMb: match.route.memoryMb ?? opts.functionMemoryMb,
         onLog: (stream, text) => opts.log?.(`[fn ${manifest.deploymentId}${match.route.route}] ${stream}: ${text.trimEnd()}`),
@@ -215,7 +225,8 @@ export function createEdgeHandler(opts: EdgeOptions) {
       } = cacheable
         ? await functionCache.fetch(`${manifest.deploymentId} ${url.host}${url.pathname}${url.search}`, () => invoke("GET"))
         : { response: await invoke(req.method!), hit: false, age: 0 };
-      const responseHeaders: Record<string, string> = { "cache-control": "no-store", ...out.headers };
+      const responseHeaders: Record<string, string | string[]> = { "cache-control": "no-store", ...out.headers };
+      delete responseHeaders["connection"];
       delete responseHeaders["content-encoding"];
       delete responseHeaders["transfer-encoding"];
       responseHeaders["content-length"] = String(out.body.length);
@@ -270,16 +281,18 @@ export function createEdgeHandler(opts: EdgeOptions) {
           root: path.join(artifactDir, SERVER_DIR),
           runtimeDir: path.join(runtimeDir, id),
           env: readEnv(artifactDir),
-          sandbox: sandboxFor(id),
+          sandbox: containers ? null : sandboxFor(id),
+          artifactEntry: manifest.server!.entry,
+          sandboxId: opts.lookup.sandboxId?.(id) ?? null,
         },
-        (port, cold) =>
+        (target, cold) =>
           new Promise<void>((resolve, reject) => {
             const headers: OutgoingHttpHeaders = { ...req.headers };
             headers["x-forwarded-host"] ??= req.headers.host;
             headers["x-forwarded-proto"] ??= "http";
             headers["x-forwarded-for"] ??= req.socket.remoteAddress;
             const upstream = http.request(
-              { host: "127.0.0.1", port, method: req.method, path: url.pathname + url.search, headers },
+              { ...target, method: req.method, path: url.pathname + url.search, headers },
               (response) => {
                 writeHead(res, response.statusCode ?? 502, {
                   ...response.headers,
@@ -477,5 +490,5 @@ export function createEdgeHandler(opts: EdgeOptions) {
     functionPool.close();
     serverPool.close();
   };
-  return Object.assign(handle, { close });
+  return Object.assign(handle, { close, containers });
 }

@@ -7,6 +7,8 @@
  *   node scripts/e2e.mjs            # full run
  *   node scripts/e2e.mjs --offline  # skip the public GitHub repos
  *   node scripts/e2e.mjs --next     # also build a Next.js static-export app (~150 MB install)
+ *   node scripts/e2e.mjs --containers  # run deployment code in sandbox containers via sandboxd
+ *                                      # (Linux, root, Docker socket; see scripts/sandbox-test.sh)
  */
 import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
@@ -23,6 +25,7 @@ const EDGE_PORT = 8180;
 const SECRET = "e2e-secret";
 const OFFLINE = process.argv.includes("--offline");
 const WITH_NEXT = process.argv.includes("--next");
+const CONTAINERS = process.argv.includes("--containers");
 const API = `http://127.0.0.1:${API_PORT}`;
 const GITHUB_PORT = 4199;
 
@@ -164,6 +167,9 @@ function start(name, script) {
       GITHUB_API_URL: `http://127.0.0.1:${GITHUB_PORT}`,
       ORBIT_BUILDER: process.env.ORBIT_BUILDER ?? "auto",
       LOG_LEVEL: "warn",
+      ...(CONTAINERS
+        ? { ORBIT_SANDBOX: "container", ORBIT_RUNTIME_IMAGE: process.env.ORBIT_RUNTIME_IMAGE ?? "orbit-runtime:dev" }
+        : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -255,6 +261,25 @@ const cronRepo = makeRepo("cron", {
     "export function GET(req) { return Response.json({ auth: req.headers.get('authorization'), ua: req.headers.get('user-agent') }); }",
   "vercel.json": JSON.stringify({ crons: [{ path: "/api/tick", schedule: "* * * * *" }] }),
 });
+/** Python functions: a Flask app from requirements.txt, a BaseHTTPRequestHandler and a dynamic route. */
+const pythonRepo = makeRepo("python", {
+  "index.html": "<h1>python</h1>",
+  "requirements.txt": "flask==3.1.0\n",
+  "api/flask.py":
+    "from flask import Flask, jsonify, request\nfrom _lib.util import shout\napp = Flask(__name__)\n\n" +
+    "@app.route('/api/flask', methods=['GET', 'POST'])\ndef index():\n" +
+    "    return jsonify(method=request.method, name=shout(request.args.get('name', 'nobody')))\n",
+  "api/_lib/util.py": "def shout(s):\n    return s.upper()\n",
+  "api/hello.py":
+    "import os\nfrom http.server import BaseHTTPRequestHandler\n\nclass handler(BaseHTTPRequestHandler):\n" +
+    "    def do_GET(self):\n        self.send_response(200)\n        self.send_header('content-type', 'text/plain')\n" +
+    "        self.end_headers()\n        self.wfile.write(('hello from python ' + os.environ.get('ORBIT_ENV', '')).encode())\n",
+  "api/items/[id].py":
+    "from urllib.parse import parse_qs\n\ndef app(environ, start_response):\n" +
+    "    start_response('200 OK', [('content-type', 'text/plain')])\n" +
+    "    return [('item ' + parse_qs(environ['QUERY_STRING'])['id'][0]).encode()]\n",
+});
+
 const badCronRepo = makeRepo("bad-cron", {
   "index.html": "<h1>bad cron</h1>",
   "vercel.json": JSON.stringify({ crons: [{ path: "/api/tick", schedule: "0 5 * * MON" }] }),
@@ -273,6 +298,7 @@ async function main() {
   console.log(`Orbit e2e · data: ${dataDir}`);
   await new Promise((resolve) => fakeGitHub.listen(GITHUB_PORT, "127.0.0.1", resolve));
   start("api", "src/index.ts");
+  if (CONTAINERS) start("sandboxd", "src/sandboxd.ts");
   start("edge", "src/edge.ts");
   for (let i = 0; i < 60; i++) {
     try {
@@ -282,6 +308,15 @@ async function main() {
     } catch {
       await sleep(500);
     }
+  }
+  if (CONTAINERS) {
+    let connected = false;
+    for (let i = 0; i < 120 && !connected; i++) {
+      connected = fs.readFileSync(path.join(tmp, "edge.log"), "utf8").includes("connected to sandboxd");
+      if (!connected) await sleep(500);
+    }
+    console.log("Sandbox containers");
+    check("edge connected to sandboxd", connected, fs.readFileSync(path.join(tmp, "sandboxd.log"), "utf8").slice(-1500));
   }
   console.log("Authentication");
   check("API requires sign-in", (await fetch(`${API}/api/projects`)).status === 401);
@@ -449,6 +484,33 @@ async function main() {
     "an invalid schedule fails the build",
     badCronDeployment.status === "error" && /crons\.0\.schedule/.test(badCronDeployment.errorMessage ?? ""),
     badCronDeployment.errorMessage ?? "",
+  );
+
+  console.log("\nPython functions");
+  const pyApp = await api("POST", "/api/projects", { repoUrl: `file://${pythonRepo}`, name: "python" });
+  const pyDeployment = await waitFor(pyApp.deployment.id);
+  check("Python app deployed", pyDeployment.status === "ready", pyDeployment.errorMessage ?? "");
+  const pyLogs = (await api("GET", `/api/deployments/${pyDeployment.id}/logs`)).lines.map((l) => l.text);
+  check(
+    "requirements.txt installed",
+    pyLogs.some((t) => t.startsWith("Installed Python dependencies")),
+  );
+  const flask = await edge("python", "/api/flask?name=orbit");
+  check(
+    "Flask (WSGI) app from requirements.txt serves requests",
+    flask.status === 200 && JSON.parse(flask.body || "{}").name === "ORBIT",
+    `${flask.status} ${flask.body.slice(0, 300)}`,
+  );
+  const pyHandler = await edge("python", "/api/hello");
+  check("BaseHTTPRequestHandler function runs with env", pyHandler.body === "hello from python production", pyHandler.body);
+  check("dynamic Python route gets its segment in the query", (await edge("python", "/api/items/7")).body === "item 7");
+  check("Python sources aren't served as static files", (await edge("python", "/api/flask.py")).status !== 200);
+  const pyRedeploy = await api("POST", `/api/deployments/${pyDeployment.id}/redeploy`, {});
+  await waitFor(pyRedeploy.deployment.id);
+  const pyRedeployLogs = (await api("GET", `/api/deployments/${pyRedeploy.deployment.id}/logs`)).lines.map((l) => l.text);
+  check(
+    "Python dependencies restored from the build cache on redeploy",
+    pyRedeployLogs.some((t) => t.startsWith("Restored Python dependencies from build cache")),
   );
 
   console.log("\nPush-to-deploy: webhook push to a feature branch creates a preview");
@@ -676,6 +738,12 @@ async function main() {
     /* pgrep exits 1 when nothing matches */
   }
   check("build process tree was killed", orphan.trim() === "", orphan);
+
+  if (CONTAINERS) {
+    const sandboxLog = fs.readFileSync(path.join(tmp, "sandboxd.log"), "utf8");
+    check("Node.js functions ran in sandbox containers", /\[dpl-[a-z0-9]+ \/api\/hello\.mjs\] started/.test(sandboxLog));
+    check("Python functions ran in sandbox containers", /\[dpl-[a-z0-9]+ \/api\/flask\.py\] started/.test(sandboxLog));
+  }
 
   // The cron app was deployed minutes ago, so its every-minute job has had a chance to run.
   console.log("\nCron jobs (on schedule)");

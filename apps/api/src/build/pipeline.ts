@@ -14,7 +14,8 @@ import {
 import { hasRoutingRules, parseRoutingConfig, ROUTING_CONFIG_FILE, type RoutingConfig } from "../lib/routing.js";
 import { type BuildSettings, findWorkspaceRoot, normalizeRelative, readSnapshot, resolveBuildSettings } from "./detect.js";
 import { BuildCache, computeCacheKey } from "./cache.js";
-import { bundleFunctions } from "./functions.js";
+import { bundleFunctions, PYTHON_PACKAGES_DIR } from "./functions.js";
+import { createHash } from "node:crypto";
 import { type CommitInfo, shallowCheckout } from "./git.js";
 import { type CronJob, parseCronsConfig } from "../lib/cron.js";
 import { lockArtifact } from "../lib/sandbox.js";
@@ -56,7 +57,7 @@ function throwIfAborted(signal: AbortSignal): void {
 
 /** Copy the build output, skipping things that must never be served from a repo-root output. */
 function copyOutput(from: string, to: string, isRepoRoot: boolean): { fileCount: number; totalBytes: number } {
-  const blocked = new Set([".git", "node_modules", ...(isRepoRoot ? ["api", ".github", ROUTING_CONFIG_FILE] : [])]);
+  const blocked = new Set([".git", "node_modules", ...(isRepoRoot ? ["api", ".github", ".orbit", ROUTING_CONFIG_FILE] : [])]);
   let fileCount = 0;
   let totalBytes = 0;
   fs.cpSync(from, to, {
@@ -144,6 +145,79 @@ function collectNextServer(projectDir: string, stagingDir: string, runtimeDir: s
   if (fs.existsSync(nextStatic)) fs.cpSync(nextStatic, path.join(staticDir, "_next", "static"), { recursive: true });
 
   return { stats: dirStats(staticDir), server: { entry: path.posix.join(SERVER_DIR, entry) } };
+}
+
+/**
+ * Installs Python functions' dependencies, like Vercel: from requirements.txt, or the
+ * `[project] dependencies` of pyproject.toml. They're installed in a Python 3.12 container (the
+ * runtime's version and platform) and cached per project, keyed by the requirements.
+ */
+async function installPythonRequirements(
+  ctx: BuildContext,
+  projectDir: string,
+  rootDirectory: string,
+  workspace: string,
+  functionsDir: string,
+): Promise<void> {
+  const { log, config, project, runner, signal } = ctx;
+  const requirements = path.join(projectDir, "requirements.txt");
+  const pyproject = path.join(projectDir, "pyproject.toml");
+  let source: string;
+  let command: string;
+  const pip = `python3 -m pip install --disable-pip-version-check --no-warn-script-location --no-compile --target ${PYTHON_PACKAGES_DIR}`;
+  if (fs.existsSync(requirements)) {
+    source = "requirements.txt";
+    command = `${pip} -r requirements.txt`;
+  } else if (fs.existsSync(pyproject)) {
+    source = "pyproject.toml";
+    const extract =
+      "import tomllib; print('\\n'.join(tomllib.load(open('pyproject.toml', 'rb')).get('project', {}).get('dependencies', [])))";
+    command = `mkdir -p .orbit && python3 -c "${extract}" > .orbit/requirements.txt && ${pip} -r .orbit/requirements.txt`;
+  } else {
+    if (fs.existsSync(path.join(projectDir, "Pipfile"))) {
+      log.system("Warning: Pipfile isn't supported; add a requirements.txt for Python dependencies");
+    }
+    log.system("Python functions: no requirements.txt or pyproject.toml, nothing to install");
+    return;
+  }
+
+  const platform = runner.kind === "docker" ? `docker:${config.pythonBuildImage}` : `${process.platform}-${process.arch}-local`;
+  const key = createHash("sha256")
+    .update(platform)
+    .update(fs.readFileSync(path.join(projectDir, source)))
+    .digest("hex")
+    .slice(0, 16);
+  const cacheRoot = path.join(config.cacheDir, project.id, "python");
+  const cached = path.join(cacheRoot, key);
+  const target = path.join(functionsDir, PYTHON_PACKAGES_DIR);
+  if (config.buildCache && ctx.deployment.useCache && fs.existsSync(cached)) {
+    fs.cpSync(cached, target, { recursive: true, verbatimSymlinks: true });
+    log.system(`Restored Python dependencies from build cache (${source} unchanged)`);
+    return;
+  }
+
+  log.system(`Installing Python dependencies from ${source}`);
+  const t = Date.now();
+  const code = await runner.run({
+    name: `${ctx.deployment.id}-python`,
+    workspaceDir: workspace,
+    rootDirectory,
+    command,
+    env: {},
+    image: config.pythonBuildImage,
+    onOutput: log.write,
+    signal,
+  });
+  throwIfAborted(signal);
+  if (code !== 0) throw new BuildError(`Installing Python dependencies from ${source} failed (exit ${code})`);
+  const installed = path.join(projectDir, PYTHON_PACKAGES_DIR);
+  if (fs.existsSync(installed)) fs.cpSync(installed, target, { recursive: true, verbatimSymlinks: true });
+  log.system(`Installed Python dependencies in ${seconds(t)}`);
+  if (config.buildCache && fs.existsSync(installed)) {
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+    fs.mkdirSync(cacheRoot, { recursive: true });
+    fs.cpSync(installed, cached, { recursive: true, verbatimSymlinks: true });
+  }
 }
 
 /** Cron jobs from vercel.json, validated now so a bad schedule fails the build. */
@@ -390,12 +464,19 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       throw new BuildError(`Bundling functions failed: ${err.message}`);
     });
     const functions = bundled.routes;
+    if (bundled.python) {
+      await installPythonRequirements(ctx, projectDir, rootDirectory, workspace, path.join(stagingDir, FUNCTIONS_DIR));
+    }
     if (functions.length || server) {
       // Like Vercel, a deployment's functions see the env as of build time, so the artifact stays immutable.
       const { CI: _ci, ...runtimeEnv } = buildEnv;
       fs.writeFileSync(path.join(stagingDir, FUNCTION_ENV_FILE), JSON.stringify(runtimeEnv), { mode: 0o600 });
     }
-    if (functions.length) log.system(`Bundled ${functions.length} function(s): ${functions.map((f) => f.route).join(", ")}`);
+    if (functions.length) {
+      log.system(
+        `Bundled ${functions.length} function(s): ${functions.map((f) => `${f.route}${f.runtime === "python" ? " (Python)" : ""}`).join(", ")}`,
+      );
+    }
     if (bundled.includedFiles) log.system(`Included ${plural(bundled.includedFiles, "file")} with functions (includeFiles)`);
 
     // 7. Publish (atomic rename: the artifact appears complete or not at all) ---

@@ -9,7 +9,9 @@
     "start": "node --disable-warning=ExperimentalWarning dist/index.js",
     "start:edge": "node --disable-warning=ExperimentalWarning dist/edge.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:sandboxd": "tsx watch --clear-screen=false src/sandboxd.ts",
+    "start:sandboxd": "node --disable-warning=ExperimentalWarning dist/sandboxd.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",

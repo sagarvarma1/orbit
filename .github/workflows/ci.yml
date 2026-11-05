@@ -32,3 +32,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Sandbox tests and end-to-end as root
         run: ./scripts/sandbox-test.sh --e2e
+
+  sandbox-containers:
+    # Production runs deployment code in sandbox containers under gVisor. Install it and run a real
+    # sandboxd against this runner's Docker daemon.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gVisor
+        run: |
+          ARCH="$(uname -m)"
+          URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+          wget -q "$URL/runsc" "$URL/runsc.sha512" "$URL/containerd-shim-runsc-v1" "$URL/containerd-shim-runsc-v1.sha512"
+          sha512sum -c runsc.sha512 containerd-shim-runsc-v1.sha512
+          chmod a+rx runsc containerd-shim-runsc-v1
+          sudo mv runsc containerd-shim-runsc-v1 /usr/local/bin
+          sudo /usr/local/bin/runsc install -- --host-uds=create
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | grep runsc
+      - name: Sandbox containers (gVisor)
+        run: ORBIT_SANDBOXD_EXPECT_RUNTIME=runsc ./scripts/sandbox-test.sh --containers

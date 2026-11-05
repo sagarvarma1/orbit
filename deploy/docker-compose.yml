@@ -46,14 +46,33 @@ services:
   edge:
     image: ${ORBIT_IMAGE_PREFIX:-ghcr.io/sagarvarma1/orbit}-api:${ORBIT_VERSION:-latest}
     command: ["node", "--disable-warning=ExperimentalWarning", "dist/edge.js"]
-    # Lets the edge install its firewall: deployment code (functions, Next.js servers) runs as
-    # per-project users who can reach the internet but not Orbit's API, the Docker network or
-    # the cloud metadata service. The rules live in this container's network namespace only.
+    environment:
+      <<: *orbit-env
+      # Deployment code runs in sandbox containers started by sandboxd; the edge only routes to them.
+      ORBIT_SANDBOX: container
+    volumes:
+      - ${ORBIT_DATA_DIR:-/opt/orbit/data}:${ORBIT_DATA_DIR:-/opt/orbit/data}
+    depends_on: [sandboxd]
+    restart: unless-stopped
+
+  # Starts a container per function instance and app server: read-only code at /var/task, only
+  # /tmp writable, memory/CPU/process limits, no capabilities, gVisor when installed, and a network
+  # that reaches the internet but not private addresses or this host. It needs the Docker socket
+  # and the host's network namespace (for that firewall), so it has no ports and talks only to the
+  # edge, over a root-only unix socket in the data directory.
+  sandboxd:
+    image: ${ORBIT_IMAGE_PREFIX:-ghcr.io/sagarvarma1/orbit}-api:${ORBIT_VERSION:-latest}
+    command: ["node", "--disable-warning=ExperimentalWarning", "dist/sandboxd.js"]
+    network_mode: host
     cap_add: [NET_ADMIN]
     environment:
       <<: *orbit-env
+      ORBIT_HOST_DATA_DIR: ${ORBIT_DATA_DIR:-/opt/orbit/data}
+      ORBIT_RUNTIME_IMAGE: ${ORBIT_IMAGE_PREFIX:-ghcr.io/sagarvarma1/orbit}-runtime:${ORBIT_VERSION:-latest}
+      ORBIT_SANDBOX_RUNTIME: ${ORBIT_SANDBOX_RUNTIME:-auto}
     volumes:
       - ${ORBIT_DATA_DIR:-/opt/orbit/data}:${ORBIT_DATA_DIR:-/opt/orbit/data}
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
   dashboard:
