@@ -28,7 +28,7 @@ function RunStatus({ run }: { run: CronRun }) {
   const label = run.status === "running" ? "Running" : run.statusCode ? String(run.statusCode) : "Failed";
   return (
     <span className={cx("inline-flex items-center gap-2 text-[13px]", tone)}>
-      <span className={cx("inline-block h-2 w-2 rounded-full", dot)} />
+      <span className={cx("inline-block h-2.5 w-2.5 shrink-0 rounded-full", dot)} />
       {label}
     </span>
   );
@@ -58,33 +58,47 @@ export default function CronsPage() {
 
   return (
     <div className="space-y-6 py-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-2xl">
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Cron Jobs</h1>
-          <p className="mt-2 text-sm text-muted">
-            Add <code className="font-mono text-fg">crons</code> to <code className="font-mono text-fg">vercel.json</code> and
-            Orbit sends a <code className="font-mono text-fg">GET</code> to each path on schedule (UTC), on the production
-            deployment only. Set a <code className="font-mono text-fg">CRON_SECRET</code> environment variable and requests carry{" "}
-            <code className="font-mono text-fg">Authorization: Bearer $CRON_SECRET</code>.
-          </p>
-        </div>
-        {data && (
-          <Button variant={data.enabled ? "secondary" : "primary"} onClick={toggle} loading={toggling}>
-            {data.enabled ? "Disable Cron Jobs" : "Enable Cron Jobs"}
-          </Button>
-        )}
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-white">Cron Jobs</h1>
+        <p className="mt-2 text-sm text-muted">
+          Add <code className="font-mono text-fg">crons</code> to <code className="font-mono text-fg">vercel.json</code> and Orbit
+          sends a <code className="font-mono text-fg">GET</code> to each path on schedule (UTC), on the production deployment
+          only. Set a <code className="font-mono text-fg">CRON_SECRET</code> environment variable and requests carry{" "}
+          <code className="font-mono text-fg">Authorization: Bearer $CRON_SECRET</code>.
+        </p>
       </div>
 
       {error && <ErrorNote>{error.message}</ErrorNote>}
-      {toggleError && <ErrorNote>{toggleError}</ErrorNote>}
       {data && !data.enabled && (
-        <div className="rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
-          Cron jobs are disabled for this project. You can still run a job by hand.
+        <div className="rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+          Cron jobs are disabled for this project, so scheduled runs are skipped. You can still run a job by hand.
         </div>
       )}
 
-      {data && <Jobs data={data} project={project.name} onRun={refresh} />}
+      {data && (
+        <section>
+          <h2 className="mb-3 text-lg font-medium text-white">Jobs</h2>
+          <Jobs data={data} project={project.name} onRun={refresh} />
+        </section>
+      )}
       {data && data.runs.length > 0 && <Runs runs={data.runs} project={project.name} />}
+
+      {data && (
+        <Card className="space-y-4 p-6">
+          <div>
+            <h2 className="font-medium text-white">{data.enabled ? "Disable Cron Jobs" : "Enable Cron Jobs"}</h2>
+            <p className="mt-1 text-sm text-muted">
+              {data.enabled
+                ? "Stops every scheduled run for this project until you enable them again. Deployments stay as they are."
+                : "Resumes the schedules in the production deployment's vercel.json."}
+            </p>
+          </div>
+          {toggleError && <ErrorNote>{toggleError}</ErrorNote>}
+          <Button size="sm" variant={data.enabled ? "secondary" : "primary"} onClick={toggle} loading={toggling}>
+            {data.enabled ? "Disable Cron Jobs" : "Enable Cron Jobs"}
+          </Button>
+        </Card>
+      )}
     </div>
   );
 }
@@ -192,8 +206,8 @@ function JobRow({
 function Runs({ runs, project }: { runs: CronRun[]; project: string }) {
   const [open, setOpen] = useState<number | null>(null);
   return (
-    <div className="space-y-3">
-      <h2 className="text-sm font-medium text-white">Recent runs</h2>
+    <section>
+      <h2 className="mb-3 text-lg font-medium text-white">Recent Runs</h2>
       <Card className="divide-y divide-line">
         {runs.map((run) => (
           <div key={run.id}>
@@ -205,7 +219,7 @@ function Runs({ runs, project }: { runs: CronRun[]; project: string }) {
                 <RunStatus run={run} />
               </span>
               <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-fg">{run.path}</span>
-              {run.trigger === "manual" && <Badge>manual</Badge>}
+              {run.trigger === "manual" && <Badge>Manual</Badge>}
               <span className="text-xs text-muted">{duration(run.durationMs)}</span>
               <span className="w-20 text-right text-xs text-muted" title={utc(run.startedAt)}>
                 {timeAgo(run.startedAt)}
@@ -227,6 +241,6 @@ function Runs({ runs, project }: { runs: CronRun[]; project: string }) {
           </div>
         ))}
       </Card>
-    </div>
+    </section>
   );
 }

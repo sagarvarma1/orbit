@@ -47,20 +47,25 @@ export default function StorePage() {
           </span>
         }
         subtitle={
-          <span className="font-mono text-xs">
-            {store.id} · {store.usage.count} files · {formatBytes(store.usage.bytes)}
-          </span>
-        }
-        actions={
-          <Button variant="danger" onClick={remove}>
-            Delete Store
-          </Button>
+          <>
+            <span className="font-mono text-fg">{store.id}</span> · {store.usage.count}{" "}
+            {store.usage.count === 1 ? "file" : "files"} · {formatBytes(store.usage.bytes)} · created {timeAgo(store.createdAt)}
+          </>
         }
       />
       <div className="space-y-8 py-8">
         <Browser client={client} onChange={refresh} />
         <Connections store={store} onChange={refresh} />
         <Quickstart store={store} onChange={refresh} />
+        <Card className="border-err/30 p-6">
+          <h2 className="font-medium text-white">Delete Store</h2>
+          <p className="mt-1 text-sm text-muted">
+            Removes the store and every file in it, and disconnects it from its projects. This can&apos;t be undone.
+          </p>
+          <Button variant="danger" size="sm" className="mt-4" onClick={remove}>
+            Delete Store
+          </Button>
+        </Card>
       </div>
     </>
   );
@@ -127,9 +132,9 @@ function Browser({ client, onChange }: { client: BlobClient; onChange: () => Pro
   const crumbs = prefix.split("/").filter(Boolean);
 
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1 text-sm">
+    <section>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1 text-lg font-medium">
           <button className={cx("hover:text-white", prefix ? "text-muted" : "text-white")} onClick={() => setPrefix("")}>
             Files
           </button>
@@ -160,7 +165,11 @@ function Browser({ client, onChange }: { client: BlobClient; onChange: () => Pro
           </Button>
         </div>
       </div>
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {error && (
+        <div className="mb-3">
+          <ErrorNote>{error}</ErrorNote>
+        </div>
+      )}
       <Card className="divide-y divide-line">
         {!items && (
           <div className="flex items-center gap-2 p-6 text-sm text-muted">
@@ -178,7 +187,7 @@ function Browser({ client, onChange }: { client: BlobClient; onChange: () => Pro
             onClick={() => setPrefix(folder)}
             className="flex w-full items-center gap-3 px-5 py-3 text-left hover:bg-raised"
           >
-            <span className="text-muted">▸</span>
+            <FolderIcon />
             <span className="font-mono text-[13px] text-fg">{folder.slice(prefix.length)}</span>
           </button>
         ))}
@@ -212,6 +221,14 @@ function Browser({ client, onChange }: { client: BlobClient; onChange: () => Pro
         )}
       </Card>
     </section>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" className="shrink-0 text-muted">
+      <path d="M1.75 3.5h4.5l1.5 1.75h6.5v7.25H1.75z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -250,28 +267,35 @@ function Connections({ store, onChange }: { store: BlobStore; onChange: () => Pr
   }
 
   return (
-    <section className="space-y-3">
-      <div>
-        <h2 className="text-sm font-medium text-white">Projects</h2>
-        <p className="mt-1 text-[13px] text-muted">
-          Connected projects get <code className="font-mono text-fg">{"<PREFIX>"}_READ_WRITE_TOKEN</code> in the environments you
-          pick. Redeploy to pick it up, like any environment variable.
-        </p>
-      </div>
-      <Card className="divide-y divide-line">
-        {store.connections.map((c) => (
-          <div key={c.project} className="flex flex-wrap items-center gap-4 px-5 py-3">
-            <Link href={`/${c.project}`} className="min-w-0 flex-1 text-sm text-white hover:underline">
-              {c.project}
-            </Link>
-            <code className="font-mono text-xs text-fg">{c.envPrefix}_READ_WRITE_TOKEN</code>
-            <span className="text-xs capitalize text-muted">{c.targets.join(", ")}</span>
-            <Button size="sm" variant="ghost" onClick={() => void disconnect(c.project)}>
-              Disconnect
-            </Button>
+    <Card>
+      <div className="space-y-4 p-6">
+        <div>
+          <h2 className="font-medium text-white">Projects</h2>
+          <p className="mt-1 text-sm text-muted">
+            Connected projects get <span className="font-mono text-fg">{"<PREFIX>"}_READ_WRITE_TOKEN</span> in the environments
+            you pick. Redeploy to pick it up, like any environment variable.
+          </p>
+        </div>
+        {store.connections.length > 0 && (
+          <div className="rounded-md border border-line">
+            {store.connections.map((c) => (
+              <div
+                key={c.project}
+                className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3 text-sm last:border-b-0"
+              >
+                <Link href={`/${c.project}`} className="min-w-0 flex-1 text-fg hover:underline">
+                  {c.project}
+                </Link>
+                <span className="font-mono text-xs text-subtle">{c.envPrefix}_READ_WRITE_TOKEN</span>
+                <span className="text-xs text-muted">{c.targets.map((t) => t[0]!.toUpperCase() + t.slice(1)).join(", ")}</span>
+                <Button size="sm" variant="ghost" onClick={() => void disconnect(c.project)}>
+                  Disconnect
+                </Button>
+              </div>
+            ))}
           </div>
-        ))}
-        <div className="flex flex-wrap items-end gap-4 px-5 py-4">
+        )}
+        <div className="flex flex-wrap items-end gap-4">
           <div className="min-w-48 flex-1">
             <Label>Connect a project</Label>
             <Select value={project} onChange={(e) => setProject(e.target.value)}>
@@ -300,13 +324,13 @@ function Connections({ store, onChange }: { store: BlobStore; onChange: () => Pr
               </label>
             ))}
           </div>
-          <Button variant="primary" onClick={connect} loading={busy} disabled={!project || targets.length === 0}>
+          <Button onClick={connect} loading={busy} disabled={!project || targets.length === 0}>
             Connect
           </Button>
         </div>
-      </Card>
-      {error && <ErrorNote>{error}</ErrorNote>}
-    </section>
+        {error && <ErrorNote>{error}</ErrorNote>}
+      </div>
+    </Card>
   );
 }
 
@@ -328,9 +352,14 @@ function Quickstart({ store, onChange }: { store: BlobStore; onChange: () => Pro
   const env = `BLOB_READ_WRITE_TOKEN="${revealed ? store.token : "••••••••••••••••"}"\nVERCEL_BLOB_API_URL="${store.apiUrl}"`;
 
   return (
-    <section className="space-y-3">
-      <h2 className="text-sm font-medium text-white">Quickstart</h2>
-      <Card className="space-y-4 p-5">
+    <Card>
+      <div className="space-y-4 p-6">
+        <div>
+          <h2 className="font-medium text-white">Quickstart</h2>
+          <p className="mt-1 text-sm text-muted">
+            Install <span className="font-mono text-fg">@vercel/blob</span> and call it as you would on Vercel.
+          </p>
+        </div>
         <pre className="overflow-x-auto rounded-md border border-line bg-bg p-4 font-mono text-[12px] text-fg">
           {`import { put } from "@vercel/blob";
 
@@ -365,7 +394,7 @@ const blob = await put("avatars/me.png", file, { access: "public" });
           </div>
           <pre className="overflow-x-auto rounded-md border border-line bg-bg p-4 font-mono text-[12px] text-fg">{env}</pre>
         </div>
-      </Card>
-    </section>
+      </div>
+    </Card>
   );
 }
