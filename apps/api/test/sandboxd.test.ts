@@ -201,8 +201,9 @@ describe.skipIf(!enabled)("sandboxd containers", () => {
     const probe = JSON.parse(res.body);
     expect(probe.uid).toBe(100_007);
     expect(probe.tmp).toBe("ok");
-    expect(probe.task).toBe("EROFS");
-    expect(probe.etc).toBe("EROFS");
+    // runc reports a read-only mount (EROFS); gVisor checks permissions first (EACCES). Both deny the write.
+    expect(["EROFS", "EACCES"]).toContain(probe.task);
+    expect(["EROFS", "EACCES"]).toContain(probe.etc);
     expect(probe.secret).toBe(false);
     expect(probe.env).toBe("from-env");
     expect(res.headers["x-orbit-instance"]).toBe("cold");
@@ -241,6 +242,8 @@ describe.skipIf(!enabled)("sandboxd containers", () => {
     const res = await get("/api/py?x=1");
     expect(res.status, why(res.body)).toBe(200);
     const probe = JSON.parse(res.body);
-    expect(probe).toMatchObject({ uid: 100_007, tmp: "ok", task: "OSError", path: "/api/py?x=1" });
+    expect(probe).toMatchObject({ uid: 100_007, tmp: "ok", path: "/api/py?x=1" });
+    // OSError (EROFS) under runc, PermissionError (EACCES) under gVisor.
+    expect(["OSError", "PermissionError"]).toContain(probe.task);
   }, 60_000);
 });
