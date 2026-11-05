@@ -1,3 +1,4 @@
+import type { CronJob } from "./cron.js";
 import type { RoutingConfig } from "./routing.js";
 
 /** Written once to data/artifacts/<id>/orbit.json when a deployment is published. Never modified. */
@@ -15,6 +16,8 @@ export interface DeploymentManifest {
   server?: ServerConfig;
   /** Redirects, rewrites and headers from the repo's vercel.json (absent when it has none). */
   routing?: RoutingConfig;
+  /** Cron jobs from vercel.json; the control plane runs them while this is the production deployment. */
+  crons?: CronJob[];
   fileCount: number;
   totalBytes: number;
   createdAt: number;

@@ -10,6 +10,7 @@ import { domainRoutes } from "./routes/domains.js";
 import { githubRoutes } from "./routes/github.js";
 import { inspectRoutes } from "./routes/inspect.js";
 import { authRoutes } from "./routes/auth.js";
+import { cronRoutes } from "./routes/crons.js";
 import { projectRoutes } from "./routes/projects.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
@@ -72,5 +73,6 @@ export async function buildApp(base: Omit<AppContext, "access"> & { access?: Acc
   webhookRoutes(app, ctx);
   domainRoutes(app, ctx);
   githubRoutes(app, ctx);
+  cronRoutes(app, ctx);
   return app;
 }

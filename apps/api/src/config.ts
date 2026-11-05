@@ -35,6 +35,13 @@ export const config = {
   apiPort: int("API_PORT", 4000),
   edgePort: int("EDGE_PORT", 8080),
   host: str("HOST", "0.0.0.0"),
+  /**
+   * How the control plane reaches the edge, for cron jobs. Requests carry the deployment's
+   * hostname in the Host header. In docker-compose this is http://edge:8080.
+   */
+  edgeInternalUrl: str("ORBIT_EDGE_INTERNAL_URL", `http://127.0.0.1:${int("EDGE_PORT", 8080)}`).replace(/\/$/, ""),
+  /** CRON_ENABLED=0 stops the scheduler (e.g. on a second control plane). */
+  cronEnabled: process.env.CRON_ENABLED !== "0",
 
   /** Deployments are served at <label>.<rootDomain>. `localhost` works with no DNS. */
   rootDomain: str("ORBIT_ROOT_DOMAIN", "localhost").toLowerCase(),

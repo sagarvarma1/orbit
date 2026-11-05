@@ -16,6 +16,7 @@ import { type BuildSettings, findWorkspaceRoot, normalizeRelative, readSnapshot,
 import { BuildCache, computeCacheKey } from "./cache.js";
 import { bundleFunctions } from "./functions.js";
 import { type CommitInfo, shallowCheckout } from "./git.js";
+import { type CronJob, parseCronsConfig } from "../lib/cron.js";
 import { lockArtifact } from "../lib/sandbox.js";
 import type { CommandRunner } from "./runner.js";
 
@@ -145,6 +146,15 @@ function collectNextServer(projectDir: string, stagingDir: string, runtimeDir: s
   return { stats: dirStats(staticDir), server: { entry: path.posix.join(SERVER_DIR, entry) } };
 }
 
+/** Cron jobs from vercel.json, validated now so a bad schedule fails the build. */
+function readCrons(vercelJson: unknown): CronJob[] | undefined {
+  try {
+    return parseCronsConfig(vercelJson);
+  } catch (err) {
+    throw new BuildError(`${ROUTING_CONFIG_FILE}: ${(err as Error).message}`);
+  }
+}
+
 /** Routing rules from vercel.json, validated now so a typo fails the build instead of a request. */
 function readRoutingConfig(projectDir: string): RoutingConfig | undefined {
   const file = path.join(projectDir, ROUTING_CONFIG_FILE);
@@ -232,6 +242,12 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
     if (hasRoutingRules(routing)) {
       log.system(
         `Routing from ${ROUTING_CONFIG_FILE}: ${plural(routing.redirects.length, "redirect")}, ${plural(routing.rewrites.length, "rewrite")}, ${plural(routing.headers.length, "header rule")}`,
+      );
+    }
+    const crons = readCrons(snapshot.vercelJson);
+    if (crons?.length) {
+      log.system(
+        `Cron jobs from ${ROUTING_CONFIG_FILE}: ${crons.map((c) => `${c.path} (${c.schedule})`).join(", ")}${deployment.target === "production" ? "" : " · they run on production deployments only"}`,
       );
     }
 
@@ -393,6 +409,7 @@ export async function runBuild(ctx: BuildContext): Promise<BuildResult> {
       functions,
       ...(server ? { server } : {}),
       ...(hasRoutingRules(routing) ? { routing } : {}),
+      ...(crons?.length ? { crons } : {}),
       fileCount: stats.fileCount,
       totalBytes: stats.totalBytes,
       createdAt: Date.now(),

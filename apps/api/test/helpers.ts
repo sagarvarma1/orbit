@@ -9,6 +9,7 @@ import { config, type Config } from "../src/config.js";
 import { openDb } from "../src/db/index.js";
 import { Repo } from "../src/db/repo.js";
 import { AuthService } from "../src/services/auth.js";
+import { CronService } from "../src/services/crons.js";
 import { DeploymentService } from "../src/services/deployments.js";
 import { GitSync } from "../src/services/git-sync.js";
 import { GitHubApp } from "../src/services/github-app.js";
@@ -52,6 +53,7 @@ export async function testApp(overrides: Partial<Config> = {}): Promise<TestApp>
     git: new GitSync(repo, deployments, githubApp),
     auth,
     githubApp,
+    crons: new CronService(repo, cfg),
   });
   await app.ready();
   return {

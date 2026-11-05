@@ -36,6 +36,8 @@ services:
       ORBIT_ADMIN_GITHUB: ${ORBIT_ADMIN_GITHUB:-}
       MAX_PROJECTS_PER_USER: ${MAX_PROJECTS_PER_USER:-10}
       MAX_ACTIVE_BUILDS_PER_USER: ${MAX_ACTIVE_BUILDS_PER_USER:-2}
+      # Cron jobs: the control plane calls the edge on the Docker network.
+      ORBIT_EDGE_INTERNAL_URL: http://edge:8080
     volumes:
       - ${ORBIT_DATA_DIR:-/opt/orbit/data}:${ORBIT_DATA_DIR:-/opt/orbit/data}
       - /var/run/docker.sock:/var/run/docker.sock

@@ -29,6 +29,8 @@ services:
       ORBIT_DASHBOARD_URL: ${ORBIT_DASHBOARD_URL:-http://localhost:3000}
       BUILD_CACHE: ${BUILD_CACHE:-1}
       GIT_POLL_INTERVAL_SECONDS: ${GIT_POLL_INTERVAL_SECONDS:-10}
+      # Cron jobs: the control plane calls the edge on the Docker network.
+      ORBIT_EDGE_INTERNAL_URL: http://edge:8080
     volumes:
       - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock

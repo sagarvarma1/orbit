@@ -107,6 +107,27 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   last_used_at INTEGER
 );
 
+-- Each time a cron job ran (on schedule or from "Run"). Scheduled runs are unique per job and
+-- minute, so a restart, or two control planes, can't fire a job twice in the same minute.
+CREATE TABLE IF NOT EXISTS cron_runs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  deployment_id TEXT NOT NULL,
+  path          TEXT NOT NULL,
+  schedule      TEXT NOT NULL,
+  trigger       TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
+  scheduled_at  INTEGER NOT NULL,
+  started_at    INTEGER NOT NULL,
+  finished_at   INTEGER,
+  status        TEXT NOT NULL CHECK (status IN ('running', 'success', 'error')),
+  status_code   INTEGER,
+  duration_ms   INTEGER,
+  output        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cron_runs_once_idx ON cron_runs(project_id, path, schedule, scheduled_at)
+  WHERE trigger = 'schedule';
+CREATE INDEX IF NOT EXISTS cron_runs_project_idx ON cron_runs(project_id, id DESC);
+
 -- Instance-wide settings, such as the GitHub App credentials.
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
@@ -131,6 +152,8 @@ const ADDED_COLUMNS: [string, string, string][] = [
   ["projects", "owner_id", "TEXT"],
   // The Linux user a project's code runs as (SANDBOX_UID_BASE + this), see lib/sandbox.ts.
   ["projects", "sandbox_id", "INTEGER"],
+  // "Disable Cron Jobs" in project settings, like Vercel.
+  ["projects", "crons_enabled", "INTEGER NOT NULL DEFAULT 1"],
 ];
 
 /**

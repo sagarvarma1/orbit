@@ -21,6 +21,8 @@ export interface Project {
   outputDirectory: string | null;
   rootDirectory: string;
   autoPromotePaused: boolean;
+  /** Whether the production deployment's cron jobs run. */
+  cronsEnabled: boolean;
   /** The user who owns the project; only they (and admins) can see or change it. */
   ownerId: string | null;
   createdAt: number;
@@ -70,6 +72,26 @@ export interface Domain {
   /** null = production; otherwise the latest deployment of this branch. */
   branch: string | null;
   createdAt: number;
+}
+
+export type CronRunStatus = "running" | "success" | "error";
+
+export interface CronRun {
+  id: number;
+  projectId: string;
+  deploymentId: string;
+  path: string;
+  schedule: string;
+  trigger: "schedule" | "manual";
+  /** The minute the run was for (manual runs: when "Run" was pressed). */
+  scheduledAt: number;
+  startedAt: number;
+  finishedAt: number | null;
+  status: CronRunStatus;
+  statusCode: number | null;
+  durationMs: number | null;
+  /** The start of the response body, or the error. */
+  output: string | null;
 }
 
 export type UserRole = "admin" | "member";
@@ -155,6 +177,7 @@ const toProject = (r: Row): Project => ({
   outputDirectory: (r.output_directory as string | null) ?? null,
   rootDirectory: (r.root_directory as string) ?? "",
   autoPromotePaused: Boolean(r.auto_promote_paused),
+  cronsEnabled: r.crons_enabled === undefined ? true : Boolean(r.crons_enabled),
   ownerId: (r.owner_id as string | null) ?? null,
   createdAt: Number(r.created_at),
   updatedAt: Number(r.updated_at),
@@ -188,6 +211,25 @@ const toAlias = (r: Row): Alias => ({
   kind: r.kind as Alias["kind"],
   updatedAt: Number(r.updated_at),
 });
+
+const toCronRun = (r: Row): CronRun => ({
+  id: Number(r.id),
+  projectId: r.project_id as string,
+  deploymentId: r.deployment_id as string,
+  path: r.path as string,
+  schedule: r.schedule as string,
+  trigger: r.trigger as CronRun["trigger"],
+  scheduledAt: Number(r.scheduled_at),
+  startedAt: Number(r.started_at),
+  finishedAt: r.finished_at == null ? null : Number(r.finished_at),
+  status: r.status as CronRunStatus,
+  statusCode: r.status_code == null ? null : Number(r.status_code),
+  durationMs: r.duration_ms == null ? null : Number(r.duration_ms),
+  output: (r.output as string | null) ?? null,
+});
+
+/** Runs kept per project; older ones are deleted. */
+const CRON_RUNS_KEPT = 200;
 
 /** Thin, typed data-access layer. All SQL lives here. */
 export class Repo {
@@ -237,8 +279,8 @@ export class Repo {
     this.db
       .prepare(
         `INSERT INTO projects (id, name, repo_url, production_branch, framework, install_command, build_command,
-           output_directory, root_directory, auto_promote_paused, owner_id, created_at, updated_at, sandbox_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sandbox_id), 0) + 1 FROM projects))`,
+           output_directory, root_directory, auto_promote_paused, crons_enabled, owner_id, created_at, updated_at, sandbox_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sandbox_id), 0) + 1 FROM projects))`,
       )
       .run(
         p.id,
@@ -251,6 +293,7 @@ export class Repo {
         p.outputDirectory,
         p.rootDirectory,
         p.autoPromotePaused ? 1 : 0,
+        p.cronsEnabled === false ? 0 : 1,
         p.ownerId,
         p.createdAt,
         p.updatedAt,
@@ -268,6 +311,7 @@ export class Repo {
       outputDirectory: "output_directory",
       rootDirectory: "root_directory",
       autoPromotePaused: "auto_promote_paused",
+      cronsEnabled: "crons_enabled",
     };
     const sets: string[] = [];
     const values: (string | number | null)[] = [];
@@ -618,6 +662,61 @@ export class Repo {
 
   deleteApiToken(userId: string, id: string): boolean {
     return this.db.prepare("DELETE FROM api_tokens WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
+  }
+
+  // --------------------------------------------------------------- cron runs
+
+  /** Records a run as started. Returns null for a scheduled run that already exists (same job and minute). */
+  startCronRun(run: Omit<CronRun, "id" | "finishedAt" | "status" | "statusCode" | "durationMs" | "output">): CronRun | null {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO cron_runs (project_id, deployment_id, path, schedule, trigger, scheduled_at, started_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'running')`,
+      )
+      .run(run.projectId, run.deploymentId, run.path, run.schedule, run.trigger, run.scheduledAt, run.startedAt);
+    if (result.changes === 0) return null;
+    return this.getCronRun(Number(result.lastInsertRowid))!;
+  }
+
+  finishCronRun(id: number, result: { status: CronRunStatus; statusCode: number | null; output: string | null }): CronRun {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE cron_runs SET status = ?, status_code = ?, output = ?, finished_at = ?, duration_ms = ? - started_at WHERE id = ?`,
+      )
+      .run(result.status, result.statusCode, result.output, now, now, id);
+    const run = this.getCronRun(id)!;
+    this.db
+      .prepare(
+        `DELETE FROM cron_runs WHERE project_id = ? AND id NOT IN
+           (SELECT id FROM cron_runs WHERE project_id = ? ORDER BY id DESC LIMIT ${CRON_RUNS_KEPT})`,
+      )
+      .run(run.projectId, run.projectId);
+    return run;
+  }
+
+  getCronRun(id: number): CronRun | undefined {
+    const row = this.db.prepare("SELECT * FROM cron_runs WHERE id = ?").get(id) as Row | undefined;
+    return row ? toCronRun(row) : undefined;
+  }
+
+  listCronRuns(projectId: string, limit = 50): CronRun[] {
+    return (
+      this.db.prepare("SELECT * FROM cron_runs WHERE project_id = ? ORDER BY id DESC LIMIT ?").all(projectId, limit) as Row[]
+    ).map(toCronRun);
+  }
+
+  /** Runs left "running" by a control plane that stopped mid-request. */
+  failInterruptedCronRuns(): number {
+    const now = Date.now();
+    return Number(
+      this.db
+        .prepare(
+          `UPDATE cron_runs SET status = 'error', output = 'Interrupted: Orbit restarted while the job was running',
+             finished_at = ?, duration_ms = ? - started_at WHERE status = 'running'`,
+        )
+        .run(now, now).changes,
+    );
   }
 
   // ---------------------------------------------------------------- settings

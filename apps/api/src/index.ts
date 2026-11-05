@@ -13,6 +13,7 @@ import { lockDataDir } from "./lib/sandbox.js";
 import { DeploymentService } from "./services/deployments.js";
 import { GitSync } from "./services/git-sync.js";
 import { AuthService } from "./services/auth.js";
+import { CronService } from "./services/crons.js";
 import { GitHubNotifier } from "./services/github.js";
 import { GitHubApp } from "./services/github-app.js";
 
@@ -36,13 +37,16 @@ async function main(): Promise<void> {
     resetPassword: config.resetAdminPassword,
   });
 
-  const app = await buildApp({ config, repo, logs, deployments, git, auth, githubApp });
+  const crons = new CronService(repo, config);
+  const app = await buildApp({ config, repo, logs, deployments, git, auth, githubApp, crons });
   deployments.recover();
   git.startPolling(config.gitPollIntervalSeconds);
+  if (config.cronEnabled) crons.start();
 
   await app.listen({ port: config.apiPort, host: config.host });
   app.log.info(`Orbit control plane on :${config.apiPort} · builder: ${runner.description} · data: ${config.dataDir}`);
   if (config.gitPollIntervalSeconds > 0) app.log.info(`Git poller every ${config.gitPollIntervalSeconds}s`);
+  if (config.cronEnabled) app.log.info(`Cron jobs on · requests go to the edge at ${config.edgeInternalUrl}`);
   if (githubApp.configured) app.log.info(`GitHub App connected: ${githubApp.credentials!.slug}`);
   else if (github.enabled) app.log.info("GitHub commit statuses and PR comments enabled (personal access token)");
   if (setupCode) {
@@ -54,6 +58,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     git.stopPolling();
+    await crons.stop();
     await deployments.queue.shutdown();
     await app.close();
     process.exit(0);

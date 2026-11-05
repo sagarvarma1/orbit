@@ -248,6 +248,18 @@ fs.rmSync(path.join(monoRepo, "node_modules"), { recursive: true, force: true })
 git(monoRepo, "add", "-A");
 git(monoRepo, "commit", "-qm", "Add lockfile");
 
+/** A static site with a function that a cron job calls every minute. */
+const cronRepo = makeRepo("cron", {
+  "index.html": "<h1>cron</h1>",
+  "api/tick.js":
+    "export function GET(req) { return Response.json({ auth: req.headers.get('authorization'), ua: req.headers.get('user-agent') }); }",
+  "vercel.json": JSON.stringify({ crons: [{ path: "/api/tick", schedule: "* * * * *" }] }),
+});
+const badCronRepo = makeRepo("bad-cron", {
+  "index.html": "<h1>bad cron</h1>",
+  "vercel.json": JSON.stringify({ crons: [{ path: "/api/tick", schedule: "0 5 * * MON" }] }),
+});
+
 const slowRepo = makeRepo("slow", {
   "package.json": JSON.stringify({
     name: "slow",
@@ -403,6 +415,41 @@ async function main() {
     headered.headers["x-content-type-options"] === "nosniff" && headered.headers["x-powered-by"] === "Orbit",
   );
   check("vercel.json itself is not served", (await edge("demo", "/vercel.json", { accept: "application/json" })).status !== 200);
+
+  console.log("\nCron jobs");
+  const cronApp = await api("POST", "/api/projects", {
+    repoUrl: `file://${cronRepo}`,
+    name: "cron",
+    env: [{ key: "CRON_SECRET", value: "e2e-cron-secret", targets: ["production"] }],
+  });
+  const cronDeployment = await waitFor(cronApp.deployment.id);
+  check("cron app deployed", cronDeployment.status === "ready", cronDeployment.errorMessage ?? "");
+  const cronLogs = (await api("GET", `/api/deployments/${cronDeployment.id}/logs`)).lines.map((l) => l.text);
+  check(
+    "build log lists the cron jobs",
+    cronLogs.some((t) => t.includes("Cron jobs from vercel.json: /api/tick (* * * * *)")),
+  );
+  const cronList = await api("GET", "/api/projects/cron/crons");
+  check(
+    "jobs listed from the production deployment with a next run",
+    cronList.deploymentId === cronDeployment.id && cronList.jobs.length === 1 && cronList.jobs[0].nextRunAt > Date.now(),
+    JSON.stringify(cronList.jobs),
+  );
+  const { run: manualRun } = await api("POST", "/api/projects/cron/crons/run", { path: "/api/tick", schedule: "* * * * *" });
+  const manualOut = JSON.parse(manualRun.output || "{}");
+  check("Run calls the job's path through the edge", manualRun.status === "success" && manualRun.statusCode === 200);
+  check(
+    "cron requests carry Bearer $CRON_SECRET and the cron user agent",
+    manualOut.auth === "Bearer e2e-cron-secret" && manualOut.ua === "vercel-cron/1.0",
+    manualRun.output,
+  );
+  const badCron = await api("POST", "/api/projects", { repoUrl: `file://${badCronRepo}`, name: "bad-cron" });
+  const badCronDeployment = await waitFor(badCron.deployment.id);
+  check(
+    "an invalid schedule fails the build",
+    badCronDeployment.status === "error" && /crons\.0\.schedule/.test(badCronDeployment.errorMessage ?? ""),
+    badCronDeployment.errorMessage ?? "",
+  );
 
   console.log("\nPush-to-deploy: webhook push to a feature branch creates a preview");
   git(demoRepo, "checkout", "-qb", "feature/v2");
@@ -629,6 +676,19 @@ async function main() {
     /* pgrep exits 1 when nothing matches */
   }
   check("build process tree was killed", orphan.trim() === "", orphan);
+
+  // The cron app was deployed minutes ago, so its every-minute job has had a chance to run.
+  console.log("\nCron jobs (on schedule)");
+  let scheduled = null;
+  const cronDeadline = Date.now() + 75_000;
+  while (!scheduled && Date.now() < cronDeadline) {
+    scheduled = (await api("GET", "/api/projects/cron/crons")).runs.find(
+      (r) => r.trigger === "schedule" && r.status !== "running",
+    );
+    if (!scheduled) await sleep(2000);
+  }
+  check("an every-minute job ran on schedule", scheduled?.status === "success", JSON.stringify(scheduled));
+  check("scheduled runs are for a whole UTC minute", scheduled ? scheduled.scheduledAt % 60_000 === 0 : false);
 }
 
 main()

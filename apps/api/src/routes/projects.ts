@@ -50,7 +50,11 @@ const createProjectInput = z.object({
   env: z.array(envVarInput).default([]),
 });
 
-const updateProjectInput = z.object({ productionBranch: z.string().min(1).optional(), ...buildSettingsInput });
+const updateProjectInput = z.object({
+  productionBranch: z.string().min(1).optional(),
+  cronsEnabled: z.boolean().optional(),
+  ...buildSettingsInput,
+});
 
 export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get("/api/projects", async (req) => ({
@@ -96,6 +100,7 @@ export function projectRoutes(app: FastifyInstance, ctx: AppContext): void {
       outputDirectory: input.outputDirectory ?? null,
       rootDirectory: input.rootDirectory ?? ".",
       autoPromotePaused: false,
+      cronsEnabled: true,
       ownerId: user.id,
       createdAt: now,
       updatedAt: now,

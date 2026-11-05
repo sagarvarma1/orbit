@@ -38,6 +38,7 @@ export interface Project {
   outputDirectory: string | null;
   rootDirectory: string;
   autoPromotePaused: boolean;
+  cronsEnabled: boolean;
   createdAt: number;
   updatedAt: number;
   productionUrl: string;
@@ -157,4 +158,33 @@ export interface DomainStatus {
     record: { type: "A" | "CNAME"; name: string; value: string } | null;
     detail: string;
   };
+}
+
+export interface CronRun {
+  id: number;
+  deploymentId: string;
+  path: string;
+  schedule: string;
+  trigger: "schedule" | "manual";
+  scheduledAt: number;
+  startedAt: number;
+  finishedAt: number | null;
+  status: "running" | "success" | "error";
+  statusCode: number | null;
+  durationMs: number | null;
+  output: string | null;
+}
+
+export interface CronJob {
+  path: string;
+  schedule: string;
+  nextRunAt: number | null;
+  lastRun: CronRun | null;
+}
+
+export interface CronStatus {
+  enabled: boolean;
+  deploymentId: string | null;
+  jobs: CronJob[];
+  runs: CronRun[];
 }
