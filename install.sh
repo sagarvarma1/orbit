@@ -48,19 +48,21 @@ docker info >/dev/null 2>&1 || fail "Docker is installed but the daemon isn't ru
 if ! docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
   ask INSTALL_GVISOR "Install gVisor so deployment code runs with its own kernel? (recommended) (y/n)" "y"
   if [ "$INSTALL_GVISOR" = "y" ]; then
-    ARCH="$(uname -m)"
-    GVISOR="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
-    TMP="$(mktemp -d)"
-    for f in runsc runsc.sha512 containerd-shim-runsc-v1 containerd-shim-runsc-v1.sha512; do
-      curl -fsSL "$GVISOR/$f" -o "$TMP/$f" || fail "Couldn't download gVisor for ${ARCH}."
-    done
-    (cd "$TMP" && sha512sum -c runsc.sha512 containerd-shim-runsc-v1.sha512 >/dev/null) || fail "gVisor checksum mismatch."
-    install -m 0755 "$TMP/runsc" "$TMP/containerd-shim-runsc-v1" /usr/local/bin/
-    rm -rf "$TMP"
-    # Sandboxes serve requests on unix sockets in bind mounts, which gVisor allows with --host-uds.
-    /usr/local/bin/runsc install -- --host-uds=create >/dev/null
-    systemctl restart docker
-    info "gVisor installed (runtime: runsc)."
+    if command -v apt-get >/dev/null 2>&1; then
+      # gVisor's own apt repository, which installs runsc with its helper binaries.
+      curl -fsSL https://gvisor.dev/archive.key -o /usr/share/keyrings/gvisor-archive-keyring.asc ||
+        fail "Couldn't download gVisor's signing key."
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.asc] https://storage.googleapis.com/gvisor/releases release main" \
+        >/etc/apt/sources.list.d/gvisor.list
+      { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq runsc; } >/dev/null ||
+        fail "Couldn't install gVisor from its apt repository."
+      # Sandboxes serve requests on unix sockets in bind mounts, which gVisor allows with --host-uds.
+      runsc install -- --host-uds=create >/dev/null
+      systemctl restart docker
+      info "gVisor installed (runtime: runsc)."
+    else
+      info "Skipping gVisor: this installer sets it up with apt. See https://gvisor.dev/docs/user_guide/install/, then run: runsc install -- --host-uds=create"
+    fi
   fi
 fi
 

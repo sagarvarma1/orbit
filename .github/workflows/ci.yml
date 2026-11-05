@@ -41,13 +41,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install gVisor
         run: |
-          ARCH="$(uname -m)"
-          URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
-          wget -q "$URL/runsc" "$URL/runsc.sha512" "$URL/containerd-shim-runsc-v1" "$URL/containerd-shim-runsc-v1.sha512"
-          sha512sum -c runsc.sha512 containerd-shim-runsc-v1.sha512
-          chmod a+rx runsc containerd-shim-runsc-v1
-          sudo mv runsc containerd-shim-runsc-v1 /usr/local/bin
-          sudo /usr/local/bin/runsc install -- --host-uds=create
+          sudo curl -fsSL https://gvisor.dev/archive.key -o /usr/share/keyrings/gvisor-archive-keyring.asc
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.asc] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq runsc
+          sudo runsc install -- --host-uds=create
           sudo systemctl restart docker
           docker info --format '{{json .Runtimes}}' | grep runsc
       - name: Sandbox containers (gVisor)
