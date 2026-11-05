@@ -43,7 +43,8 @@ fi
 docker run --rm --cap-add NET_ADMIN -e E2E="$MODE" -v "$PWD:/src:ro" node:22-bookworm bash -c "$SETUP"'
   (cd apps/api && npx vitest run test/sandbox.test.ts test/functions.test.ts)
   if [ "$E2E" = "--e2e" ]; then
-    ORBIT_BUILDER=process node scripts/e2e.mjs --next
+    apt-get install -y -qq python3-pip >/dev/null
+    PIP_BREAK_SYSTEM_PACKAGES=1 ORBIT_BUILDER=process node scripts/e2e.mjs --next
     grep -q "per-project users on · firewall on" /tmp/orbit-e2e-*/edge.log || { echo "sandbox was not active"; exit 1; }
   fi
 '

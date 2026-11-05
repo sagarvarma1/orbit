@@ -43,6 +43,14 @@ let failed = 0;
 // ------------------------------------------------------------------ helpers
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** JSON from a response body, or {} when it isn't JSON (an error page), so the check fails instead of the run. */
+function parseJson(body) {
+  try {
+    return JSON.parse(body || "{}");
+  } catch {
+    return {};
+  }
+}
 
 function check(name, ok, detail = "") {
   if (ok) {
@@ -572,11 +580,13 @@ async function main() {
   const blobRedeploy = await api("POST", `/api/deployments/${blobApp.deployment.id}/redeploy`, {});
   const blobDeployment = await waitFor(blobRedeploy.deployment.id);
   check("blob app deployed with the store connected", blobDeployment.status === "ready", blobDeployment.errorMessage ?? "");
-  // In sandbox containers, blob.localhost is the container's own loopback; on a server blob.<root>
-  // is a public hostname. So functions calling Blob are only checked in process mode.
-  if (!CONTAINERS) {
+  // blob.localhost is loopback, which sandboxed code can't reach: in containers it's the container's
+  // own, and as root on Linux the sandbox firewall blocks it. On a server blob.<root> is a public
+  // hostname, so functions calling Blob are only checked unsandboxed.
+  const sandboxFirewall = process.platform === "linux" && process.getuid?.() === 0;
+  if (!CONTAINERS && !sandboxFirewall) {
     const uploaded = await edgeRequest("POST", "blobapp", "/api/upload", { body: "hello from a function" });
-    const uploadedJson = JSON.parse(uploaded.body || "{}");
+    const uploadedJson = parseJson(uploaded.body);
     check(
       "a function uploads with put() and lists with list()",
       uploaded.status === 200 && uploadedJson.count === 1,
@@ -596,7 +606,7 @@ async function main() {
         payload: { pathname: "e2e/client.txt", clientPayload: null, multipart: false },
       }),
     });
-    const clientToken = JSON.parse(tokenRes.body || "{}").clientToken ?? "";
+    const clientToken = parseJson(tokenRes.body).clientToken ?? "";
     check(
       "handleUpload issues a client token",
       clientToken.startsWith(`vercel_blob_client_${store.id}_`),
